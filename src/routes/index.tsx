@@ -9,6 +9,7 @@ import {
   adminUpdateMasterPassword, adminUpdateReport, adminDeleteReport,
   type Workshop, type Report, type AdminSummary,
 } from "@/lib/api";
+import { exportAdminExcel, exportAdminPDF } from "@/lib/export";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -384,12 +385,30 @@ function AdminSummaryTab({ password }: { password: string }) {
 
   if (isLoading) return <p className="text-muted-foreground">جاري التحميل...</p>;
 
+  async function handleExcel() {
+    try { await exportAdminExcel(password, rows); toast.success("تم تصدير ملف Excel"); }
+    catch (e: any) { toast.error(e.message ?? "فشل التصدير"); }
+  }
+  async function handlePDF() {
+    try { await exportAdminPDF(password, rows); }
+    catch (e: any) { toast.error(e.message ?? "فشل التصدير"); }
+  }
+
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-3">
         <SummaryCard label="إجمالي الوارد لكل الورش" value={grand.received} accent="primary" />
         <SummaryCard label="إجمالي تم تصليحه" value={grand.repaired} accent="success" />
         <SummaryCard label="إجمالي تم تسليمه" value={grand.delivered} accent="warning" />
+      </div>
+
+      <div className="flex flex-wrap gap-3">
+        <button onClick={handleExcel} className="btn-primary-grad rounded-lg px-5 py-2.5 text-sm inline-flex items-center gap-2">
+          📊 تصدير Excel
+        </button>
+        <button onClick={handlePDF} className="rounded-lg border border-border bg-secondary/60 hover:bg-secondary px-5 py-2.5 text-sm inline-flex items-center gap-2">
+          📄 تصدير PDF / طباعة
+        </button>
       </div>
 
       <div className="glass rounded-2xl p-2 sm:p-4">
