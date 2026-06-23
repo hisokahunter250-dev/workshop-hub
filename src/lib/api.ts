@@ -64,7 +64,7 @@ export async function addReport(args: {
     p_received: args.received,
     p_repaired: args.repaired,
     p_delivered: args.delivered,
-    p_notes: args.notes ?? null,
+    p_notes: (args.notes ?? "") as string,
   });
   if (error) throw error;
   return data as string;
@@ -107,7 +107,7 @@ export async function adminUpdateReport(args: {
     p_received: args.received,
     p_repaired: args.repaired,
     p_delivered: args.delivered,
-    p_notes: args.notes ?? null,
+    p_notes: (args.notes ?? "") as string,
   });
   if (error) throw error;
 }
