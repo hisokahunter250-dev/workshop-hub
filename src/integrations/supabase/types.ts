@@ -14,13 +14,189 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      admin_config: {
+        Row: {
+          id: number
+          master_password_hash: string
+        }
+        Insert: {
+          id?: number
+          master_password_hash: string
+        }
+        Update: {
+          id?: number
+          master_password_hash?: string
+        }
+        Relationships: []
+      }
+      reports: {
+        Row: {
+          created_at: string
+          delivered: number
+          id: string
+          notes: string | null
+          received: number
+          repaired: number
+          report_date: string
+          workshop_id: string
+        }
+        Insert: {
+          created_at?: string
+          delivered?: number
+          id?: string
+          notes?: string | null
+          received?: number
+          repaired?: number
+          report_date?: string
+          workshop_id: string
+        }
+        Update: {
+          created_at?: string
+          delivered?: number
+          id?: string
+          notes?: string | null
+          received?: number
+          repaired?: number
+          report_date?: string
+          workshop_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reports_workshop_id_fkey"
+            columns: ["workshop_id"]
+            isOneToOne: false
+            referencedRelation: "workshops"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      workshops: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          password_hash: string
+          sort_order: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          password_hash: string
+          sort_order?: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          password_hash?: string
+          sort_order?: number
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      add_report: {
+        Args: {
+          p_date: string
+          p_delivered: number
+          p_notes: string
+          p_password: string
+          p_received: number
+          p_repaired: number
+          p_workshop_id: string
+        }
+        Returns: string
+      }
+      admin_delete_report: {
+        Args: { p_admin_password: string; p_report_id: string }
+        Returns: boolean
+      }
+      admin_get_all: {
+        Args: { p_admin_password: string }
+        Returns: {
+          reports_count: number
+          sort_order: number
+          total_delivered: number
+          total_received: number
+          total_repaired: number
+          workshop_id: string
+          workshop_name: string
+        }[]
+      }
+      admin_get_reports: {
+        Args: { p_admin_password: string; p_workshop_id: string }
+        Returns: {
+          created_at: string
+          delivered: number
+          id: string
+          notes: string | null
+          received: number
+          repaired: number
+          report_date: string
+          workshop_id: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "reports"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      admin_update_master_password: {
+        Args: { p_new: string; p_old: string }
+        Returns: boolean
+      }
+      admin_update_report: {
+        Args: {
+          p_admin_password: string
+          p_date: string
+          p_delivered: number
+          p_notes: string
+          p_received: number
+          p_repaired: number
+          p_report_id: string
+        }
+        Returns: boolean
+      }
+      admin_update_workshop_password: {
+        Args: {
+          p_admin_password: string
+          p_new_password: string
+          p_workshop_id: string
+        }
+        Returns: boolean
+      }
+      get_workshop_reports: {
+        Args: { p_password: string; p_workshop_id: string }
+        Returns: {
+          created_at: string
+          delivered: number
+          id: string
+          notes: string | null
+          received: number
+          repaired: number
+          report_date: string
+          workshop_id: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "reports"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      login_admin: { Args: { p_password: string }; Returns: boolean }
+      login_workshop: {
+        Args: { p_password: string; p_workshop_id: string }
+        Returns: {
+          id: string
+          name: string
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never
