@@ -156,7 +156,7 @@ export async function adminAddAdmin(adminPassword: string, username: string, pas
 }
 export async function adminUpdateAdmin(adminPassword: string, adminId: string, newPassword: string | null, permissions: PermissionKey[]) {
   const { error } = await supabase.rpc("admin_update_admin", {
-    p_admin_password: adminPassword, p_admin_id: adminId, p_new_password: newPassword, p_permissions: permissions,
+    p_admin_password: adminPassword, p_admin_id: adminId, p_new_password: (newPassword ?? "") as string, p_permissions: permissions,
   });
   if (error) throw error;
 }
