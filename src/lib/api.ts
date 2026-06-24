@@ -100,6 +100,7 @@ export async function getWorkshopReports(workshopId: string, password: string): 
 export async function addReport(args: {
   workshopId: string; password: string; date: string;
   received: number; repaired: number; delivered: number; notes?: string;
+  extra?: Record<string, number>;
 }) {
   const { data, error } = await supabase.rpc("add_report", {
     p_workshop_id: args.workshopId,
@@ -109,6 +110,7 @@ export async function addReport(args: {
     p_repaired: args.repaired,
     p_delivered: args.delivered,
     p_notes: (args.notes ?? "") as string,
+    p_extra: (args.extra ?? {}) as never,
   });
   if (error) throw error;
   return data as string;
