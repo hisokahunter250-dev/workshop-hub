@@ -29,6 +29,51 @@ export type Database = {
         }
         Relationships: []
       }
+      admin_users: {
+        Row: {
+          created_at: string
+          id: string
+          password_hash: string
+          permissions: string[]
+          username: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          password_hash: string
+          permissions?: string[]
+          username: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          password_hash?: string
+          permissions?: string[]
+          username?: string
+        }
+        Relationships: []
+      }
+      app_settings: {
+        Row: {
+          id: number
+          notification_email: string | null
+          theme: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          notification_email?: string | null
+          theme?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          notification_email?: string | null
+          theme?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       field_configs: {
         Row: {
           created_at: string
@@ -155,9 +200,26 @@ export type Database = {
             }
             Returns: string
           }
+      admin_add_admin: {
+        Args: {
+          p_admin_password: string
+          p_password: string
+          p_permissions: string[]
+          p_username: string
+        }
+        Returns: string
+      }
       admin_add_field: {
         Args: { p_admin_password: string; p_key: string; p_label: string }
         Returns: string
+      }
+      admin_add_workshop: {
+        Args: { p_admin_password: string; p_name: string; p_password: string }
+        Returns: string
+      }
+      admin_delete_admin: {
+        Args: { p_admin_id: string; p_admin_password: string }
+        Returns: boolean
       }
       admin_delete_field: {
         Args: { p_admin_password: string; p_field_id: string }
@@ -165,6 +227,10 @@ export type Database = {
       }
       admin_delete_report: {
         Args: { p_admin_password: string; p_report_id: string }
+        Returns: boolean
+      }
+      admin_delete_workshop: {
+        Args: { p_admin_password: string; p_workshop_id: string }
         Returns: boolean
       }
       admin_get_all: {
@@ -199,6 +265,15 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      admin_list_admins: {
+        Args: { p_admin_password: string }
+        Returns: {
+          created_at: string
+          id: string
+          permissions: string[]
+          username: string
+        }[]
+      }
       admin_list_fields: {
         Args: { p_admin_password: string }
         Returns: {
@@ -215,6 +290,23 @@ export type Database = {
           isOneToOne: false
           isSetofReturn: true
         }
+      }
+      admin_login: {
+        Args: { p_password: string }
+        Returns: {
+          is_master: boolean
+          permissions: string[]
+          username: string
+        }[]
+      }
+      admin_update_admin: {
+        Args: {
+          p_admin_id: string
+          p_admin_password: string
+          p_new_password: string
+          p_permissions: string[]
+        }
+        Returns: boolean
       }
       admin_update_field_label: {
         Args: { p_admin_password: string; p_field_id: string; p_label: string }
@@ -250,6 +342,14 @@ export type Database = {
             }
             Returns: boolean
           }
+      admin_update_settings: {
+        Args: {
+          p_admin_password: string
+          p_notification_email: string
+          p_theme: string
+        }
+        Returns: boolean
+      }
       admin_update_workshop_password: {
         Args: {
           p_admin_password: string
@@ -257,6 +357,17 @@ export type Database = {
           p_workshop_id: string
         }
         Returns: boolean
+      }
+      check_admin_perm: {
+        Args: { p_password: string; p_perm: string }
+        Returns: boolean
+      }
+      get_settings: {
+        Args: never
+        Returns: {
+          notification_email: string
+          theme: string
+        }[]
       }
       get_workshop_reports: {
         Args: { p_password: string; p_workshop_id: string }
