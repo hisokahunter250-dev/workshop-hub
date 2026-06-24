@@ -32,6 +32,33 @@ export type FieldConfig = {
 export const BUILTIN_KEYS = ["received", "repaired", "delivered"] as const;
 export type BuiltinKey = (typeof BUILTIN_KEYS)[number];
 
+export const ALL_PERMISSIONS = [
+  { key: "view_reports", label: "عرض التقارير" },
+  { key: "edit_reports", label: "تعديل / حذف التقارير" },
+  { key: "manage_workshop_passwords", label: "إدارة الورش وكلمات مرورها" },
+  { key: "manage_settings", label: "إدارة الإعدادات والحقول والأدمنز" },
+] as const;
+export type PermissionKey = (typeof ALL_PERMISSIONS)[number]["key"];
+
+export type AdminUser = {
+  id: string;
+  username: string;
+  permissions: PermissionKey[];
+  created_at: string;
+};
+
+export type AppSettings = {
+  theme: "dark" | "light";
+  notification_email: string | null;
+};
+
+export type AdminLoginResult = {
+  isMaster: boolean;
+  username: string;
+  permissions: PermissionKey[];
+};
+
+// ---------- Fields ----------
 export async function listFields(): Promise<FieldConfig[]> {
   const { data, error } = await supabase
     .from("field_configs")
@@ -65,6 +92,7 @@ export async function adminDeleteField(adminPassword: string, fieldId: string) {
   if (error) throw error;
 }
 
+// ---------- Workshops ----------
 export async function listWorkshops(): Promise<Workshop[]> {
   const { data, error } = await supabase
     .from("workshops")
@@ -83,12 +111,63 @@ export async function loginWorkshop(workshopId: string, password: string) {
   return (data && data.length > 0) ? data[0] as { id: string; name: string } : null;
 }
 
+export async function adminAddWorkshop(adminPassword: string, name: string, password: string) {
+  const { error } = await supabase.rpc("admin_add_workshop", {
+    p_admin_password: adminPassword, p_name: name, p_password: password,
+  });
+  if (error) throw error;
+}
+export async function adminDeleteWorkshop(adminPassword: string, workshopId: string) {
+  const { error } = await supabase.rpc("admin_delete_workshop", {
+    p_admin_password: adminPassword, p_workshop_id: workshopId,
+  });
+  if (error) throw error;
+}
+
+// ---------- Admin login / sub-admins ----------
 export async function loginAdmin(password: string): Promise<boolean> {
   const { data, error } = await supabase.rpc("login_admin", { p_password: password });
   if (error) throw error;
   return !!data;
 }
 
+export async function adminLogin(password: string): Promise<AdminLoginResult | null> {
+  const { data, error } = await supabase.rpc("admin_login", { p_password: password });
+  if (error) throw error;
+  const row = (data as any[])?.[0];
+  if (!row) return null;
+  return {
+    isMaster: !!row.is_master,
+    username: row.username,
+    permissions: (row.permissions as PermissionKey[]) ?? [],
+  };
+}
+
+export async function adminListAdmins(adminPassword: string): Promise<AdminUser[]> {
+  const { data, error } = await supabase.rpc("admin_list_admins", { p_admin_password: adminPassword });
+  if (error) throw error;
+  return (data as AdminUser[]) ?? [];
+}
+export async function adminAddAdmin(adminPassword: string, username: string, password: string, permissions: PermissionKey[]) {
+  const { error } = await supabase.rpc("admin_add_admin", {
+    p_admin_password: adminPassword, p_username: username, p_password: password, p_permissions: permissions,
+  });
+  if (error) throw error;
+}
+export async function adminUpdateAdmin(adminPassword: string, adminId: string, newPassword: string | null, permissions: PermissionKey[]) {
+  const { error } = await supabase.rpc("admin_update_admin", {
+    p_admin_password: adminPassword, p_admin_id: adminId, p_new_password: newPassword, p_permissions: permissions,
+  });
+  if (error) throw error;
+}
+export async function adminDeleteAdmin(adminPassword: string, adminId: string) {
+  const { error } = await supabase.rpc("admin_delete_admin", {
+    p_admin_password: adminPassword, p_admin_id: adminId,
+  });
+  if (error) throw error;
+}
+
+// ---------- Reports ----------
 export async function getWorkshopReports(workshopId: string, password: string): Promise<Report[]> {
   const { data, error } = await supabase.rpc("get_workshop_reports", {
     p_workshop_id: workshopId, p_password: password,
@@ -163,6 +242,21 @@ export async function adminUpdateReport(args: {
 export async function adminDeleteReport(adminPassword: string, reportId: string) {
   const { error } = await supabase.rpc("admin_delete_report", {
     p_admin_password: adminPassword, p_report_id: reportId,
+  });
+  if (error) throw error;
+}
+
+// ---------- Settings ----------
+export async function getSettings(): Promise<AppSettings> {
+  const { data, error } = await supabase.rpc("get_settings");
+  if (error) throw error;
+  const row = (data as any[])?.[0];
+  return { theme: (row?.theme as "dark" | "light") ?? "dark", notification_email: row?.notification_email ?? null };
+}
+
+export async function adminUpdateSettings(adminPassword: string, theme: "dark" | "light", email: string) {
+  const { error } = await supabase.rpc("admin_update_settings", {
+    p_admin_password: adminPassword, p_theme: theme, p_notification_email: email,
   });
   if (error) throw error;
 }
