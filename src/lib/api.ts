@@ -10,6 +10,7 @@ export type Report = {
   delivered: number;
   notes: string | null;
   created_at: string;
+  extra?: Record<string, number> | null;
 };
 export type AdminSummary = {
   workshop_id: string;
@@ -20,6 +21,49 @@ export type AdminSummary = {
   total_delivered: number;
   reports_count: number;
 };
+export type FieldConfig = {
+  id: string;
+  key: string;
+  label: string;
+  sort_order: number;
+  is_builtin: boolean;
+};
+
+export const BUILTIN_KEYS = ["received", "repaired", "delivered"] as const;
+export type BuiltinKey = (typeof BUILTIN_KEYS)[number];
+
+export async function listFields(): Promise<FieldConfig[]> {
+  const { data, error } = await supabase
+    .from("field_configs")
+    .select("id, key, label, sort_order, is_builtin")
+    .order("sort_order");
+  if (error) throw error;
+  return (data ?? []) as FieldConfig[];
+}
+
+export async function adminListFields(adminPassword: string): Promise<FieldConfig[]> {
+  const { data, error } = await supabase.rpc("admin_list_fields", { p_admin_password: adminPassword });
+  if (error) throw error;
+  return (data as FieldConfig[]) ?? [];
+}
+export async function adminUpdateFieldLabel(adminPassword: string, fieldId: string, label: string) {
+  const { error } = await supabase.rpc("admin_update_field_label", {
+    p_admin_password: adminPassword, p_field_id: fieldId, p_label: label,
+  });
+  if (error) throw error;
+}
+export async function adminAddField(adminPassword: string, key: string, label: string) {
+  const { error } = await supabase.rpc("admin_add_field", {
+    p_admin_password: adminPassword, p_key: key, p_label: label,
+  });
+  if (error) throw error;
+}
+export async function adminDeleteField(adminPassword: string, fieldId: string) {
+  const { error } = await supabase.rpc("admin_delete_field", {
+    p_admin_password: adminPassword, p_field_id: fieldId,
+  });
+  if (error) throw error;
+}
 
 export async function listWorkshops(): Promise<Workshop[]> {
   const { data, error } = await supabase
@@ -56,6 +100,7 @@ export async function getWorkshopReports(workshopId: string, password: string): 
 export async function addReport(args: {
   workshopId: string; password: string; date: string;
   received: number; repaired: number; delivered: number; notes?: string;
+  extra?: Record<string, number>;
 }) {
   const { data, error } = await supabase.rpc("add_report", {
     p_workshop_id: args.workshopId,
@@ -65,6 +110,7 @@ export async function addReport(args: {
     p_repaired: args.repaired,
     p_delivered: args.delivered,
     p_notes: (args.notes ?? "") as string,
+    p_extra: (args.extra ?? {}) as never,
   });
   if (error) throw error;
   return data as string;
@@ -99,6 +145,7 @@ export async function adminUpdateMasterPassword(oldPass: string, newPass: string
 export async function adminUpdateReport(args: {
   adminPassword: string; reportId: string; date: string;
   received: number; repaired: number; delivered: number; notes?: string;
+  extra?: Record<string, number>;
 }) {
   const { error } = await supabase.rpc("admin_update_report", {
     p_admin_password: args.adminPassword,
@@ -108,6 +155,7 @@ export async function adminUpdateReport(args: {
     p_repaired: args.repaired,
     p_delivered: args.delivered,
     p_notes: (args.notes ?? "") as string,
+    p_extra: (args.extra ?? null) as never,
   });
   if (error) throw error;
 }

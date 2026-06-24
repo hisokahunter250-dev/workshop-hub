@@ -29,10 +29,38 @@ export type Database = {
         }
         Relationships: []
       }
+      field_configs: {
+        Row: {
+          created_at: string
+          id: string
+          is_builtin: boolean
+          key: string
+          label: string
+          sort_order: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_builtin?: boolean
+          key: string
+          label: string
+          sort_order?: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_builtin?: boolean
+          key?: string
+          label?: string
+          sort_order?: number
+        }
+        Relationships: []
+      }
       reports: {
         Row: {
           created_at: string
           delivered: number
+          extra: Json
           id: string
           notes: string | null
           received: number
@@ -43,6 +71,7 @@ export type Database = {
         Insert: {
           created_at?: string
           delivered?: number
+          extra?: Json
           id?: string
           notes?: string | null
           received?: number
@@ -53,6 +82,7 @@ export type Database = {
         Update: {
           created_at?: string
           delivered?: number
+          extra?: Json
           id?: string
           notes?: string | null
           received?: number
@@ -99,17 +129,39 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      add_report: {
-        Args: {
-          p_date: string
-          p_delivered: number
-          p_notes: string
-          p_password: string
-          p_received: number
-          p_repaired: number
-          p_workshop_id: string
-        }
+      add_report:
+        | {
+            Args: {
+              p_date: string
+              p_delivered: number
+              p_notes: string
+              p_password: string
+              p_received: number
+              p_repaired: number
+              p_workshop_id: string
+            }
+            Returns: string
+          }
+        | {
+            Args: {
+              p_date: string
+              p_delivered: number
+              p_extra?: Json
+              p_notes: string
+              p_password: string
+              p_received: number
+              p_repaired: number
+              p_workshop_id: string
+            }
+            Returns: string
+          }
+      admin_add_field: {
+        Args: { p_admin_password: string; p_key: string; p_label: string }
         Returns: string
+      }
+      admin_delete_field: {
+        Args: { p_admin_password: string; p_field_id: string }
+        Returns: boolean
       }
       admin_delete_report: {
         Args: { p_admin_password: string; p_report_id: string }
@@ -132,6 +184,7 @@ export type Database = {
         Returns: {
           created_at: string
           delivered: number
+          extra: Json
           id: string
           notes: string | null
           received: number
@@ -146,22 +199,57 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      admin_list_fields: {
+        Args: { p_admin_password: string }
+        Returns: {
+          created_at: string
+          id: string
+          is_builtin: boolean
+          key: string
+          label: string
+          sort_order: number
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "field_configs"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      admin_update_field_label: {
+        Args: { p_admin_password: string; p_field_id: string; p_label: string }
+        Returns: boolean
+      }
       admin_update_master_password: {
         Args: { p_new: string; p_old: string }
         Returns: boolean
       }
-      admin_update_report: {
-        Args: {
-          p_admin_password: string
-          p_date: string
-          p_delivered: number
-          p_notes: string
-          p_received: number
-          p_repaired: number
-          p_report_id: string
-        }
-        Returns: boolean
-      }
+      admin_update_report:
+        | {
+            Args: {
+              p_admin_password: string
+              p_date: string
+              p_delivered: number
+              p_notes: string
+              p_received: number
+              p_repaired: number
+              p_report_id: string
+            }
+            Returns: boolean
+          }
+        | {
+            Args: {
+              p_admin_password: string
+              p_date: string
+              p_delivered: number
+              p_extra?: Json
+              p_notes: string
+              p_received: number
+              p_repaired: number
+              p_report_id: string
+            }
+            Returns: boolean
+          }
       admin_update_workshop_password: {
         Args: {
           p_admin_password: string
@@ -175,6 +263,7 @@ export type Database = {
         Returns: {
           created_at: string
           delivered: number
+          extra: Json
           id: string
           notes: string | null
           received: number

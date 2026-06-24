@@ -7,7 +7,9 @@ import {
   getWorkshopReports, addReport,
   adminGetAll, adminGetReports, adminUpdateWorkshopPassword,
   adminUpdateMasterPassword, adminUpdateReport, adminDeleteReport,
-  type Workshop, type Report, type AdminSummary,
+  listFields, adminListFields, adminUpdateFieldLabel, adminAddField, adminDeleteField,
+  BUILTIN_KEYS,
+  type Workshop, type Report, type AdminSummary, type FieldConfig,
 } from "@/lib/api";
 import { exportAdminExcel, exportAdminPDF } from "@/lib/export";
 
@@ -42,12 +44,21 @@ function saveSession(s: Session) {
   else localStorage.setItem(SESSION_KEY, JSON.stringify(s));
 }
 
+// helpers for field labels
+function useFields() {
+  return useQuery({ queryKey: ["fields"], queryFn: listFields, staleTime: 30_000 });
+}
+function labelFor(fields: FieldConfig[], key: string, fallback: string) {
+  return fields.find(f => f.key === key)?.label ?? fallback;
+}
+function customFields(fields: FieldConfig[]) {
+  return fields.filter(f => !f.is_builtin);
+}
+
 function HomePage() {
   const [session, setSession] = useState<Session>({ kind: "none" });
   useEffect(() => { setSession(loadSession()); }, []);
-
   function setAndSave(s: Session) { setSession(s); saveSession(s); }
-
   return (
     <div className="min-h-screen">
       <Header session={session} onLogout={() => setAndSave({ kind: "none" })} />
@@ -88,7 +99,6 @@ function Header({ session, onLogout }: { session: Session; onLogout: () => void 
 function LoginScreen({ onLogin }: { onLogin: (s: Session) => void }) {
   const [mode, setMode] = useState<"workshop" | "admin">("workshop");
   const { data: workshops, isLoading } = useQuery({ queryKey: ["workshops"], queryFn: listWorkshops });
-
   return (
     <div className="grid gap-8 lg:grid-cols-2 items-start mt-4">
       <section>
@@ -99,7 +109,7 @@ function LoginScreen({ onLogin }: { onLogin: (s: Session) => void }) {
         </h2>
         <p className="mt-4 text-muted-foreground text-lg leading-relaxed max-w-xl">
           كل ورشة تدخل ببياناتها وتسجل: العدد الوارد للصيانة، ما تم تصليحه، وما تم تسليمه للمركز.
-          والأدمن يطلع على إحصائيات كل الورش ويتحكم بكلمات المرور والبيانات.
+          والأدمن يطلع على إحصائيات كل الورش ويتحكم بكلمات المرور والبيانات والحقول.
         </p>
         <div className="mt-6 grid grid-cols-3 gap-3 max-w-md">
           <Stat label="ورشة" value="16" />
@@ -107,7 +117,6 @@ function LoginScreen({ onLogin }: { onLogin: (s: Session) => void }) {
           <Stat label="فوري" value="⚡" />
         </div>
       </section>
-
       <section className="glass rounded-2xl p-6 sm:p-8">
         <div className="flex gap-2 p-1 rounded-xl bg-secondary/60 mb-6">
           <TabBtn active={mode === "workshop"} onClick={() => setMode("workshop")}>دخول ورشة</TabBtn>
@@ -142,7 +151,6 @@ function WorkshopLogin({ workshops, loading, onLogin }: { workshops: Workshop[];
   const [wsId, setWsId] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
-
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!wsId || !password) { toast.error("اختر الورشة وأدخل كلمة المرور"); return; }
@@ -155,7 +163,6 @@ function WorkshopLogin({ workshops, loading, onLogin }: { workshops: Workshop[];
     } catch (e: any) { toast.error(e.message ?? "خطأ"); }
     finally { setSubmitting(false); }
   }
-
   return (
     <form onSubmit={submit} className="space-y-4">
       <Field label="الورشة">
@@ -218,20 +225,37 @@ function WorkshopView({ session, onLogout }: {
   session: Extract<Session, { kind: "workshop" }>; onLogout: () => void;
 }) {
   const qc = useQueryClient();
+  const { data: fields = [] } = useFields();
+  const extras = customFields(fields);
+
   const { data: reports = [], isLoading } = useQuery({
     queryKey: ["wsReports", session.id],
     queryFn: () => getWorkshopReports(session.id, session.password),
   });
 
-  const totals = useMemo(() => reports.reduce(
-    (a, r) => ({ received: a.received + r.received, repaired: a.repaired + r.repaired, delivered: a.delivered + r.delivered }),
-    { received: 0, repaired: 0, delivered: 0 }
-  ), [reports]);
+  const totals = useMemo(() => {
+    const t: Record<string, number> = { received: 0, repaired: 0, delivered: 0 };
+    for (const r of reports) {
+      t.received += r.received; t.repaired += r.repaired; t.delivered += r.delivered;
+      const ex = (r.extra ?? {}) as Record<string, number>;
+      for (const f of extras) t[f.key] = (t[f.key] ?? 0) + Number(ex[f.key] ?? 0);
+    }
+    return t;
+  }, [reports, extras]);
 
-  const [form, setForm] = useState({
+  const initialForm = () => ({
     date: new Date().toISOString().slice(0, 10),
     received: "", repaired: "", delivered: "", notes: "",
+    extra: Object.fromEntries(extras.map(f => [f.key, ""])) as Record<string, string>,
   });
+  const [form, setForm] = useState(initialForm);
+  useEffect(() => {
+    setForm(f => ({
+      ...f,
+      extra: Object.fromEntries(extras.map(x => [x.key, f.extra[x.key] ?? ""])) as Record<string, string>,
+    }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extras.map(f => f.key).join(",")]);
 
   const addMut = useMutation({
     mutationFn: () => addReport({
@@ -241,14 +265,17 @@ function WorkshopView({ session, onLogout }: {
       repaired: Number(form.repaired || 0),
       delivered: Number(form.delivered || 0),
       notes: form.notes,
+      extra: Object.fromEntries(extras.map(f => [f.key, Number(form.extra[f.key] || 0)])),
     }),
     onSuccess: () => {
       toast.success("تم حفظ التقرير");
-      setForm({ date: new Date().toISOString().slice(0, 10), received: "", repaired: "", delivered: "", notes: "" });
+      setForm(initialForm());
       qc.invalidateQueries({ queryKey: ["wsReports", session.id] });
     },
     onError: (e: any) => toast.error(e.message ?? "خطأ في الحفظ"),
   });
+
+  const accentMap: Record<string, "primary" | "success" | "warning"> = { received: "primary", repaired: "success", delivered: "warning" };
 
   return (
     <div className="space-y-8">
@@ -257,11 +284,16 @@ function WorkshopView({ session, onLogout }: {
         <h2 className="text-3xl font-black gradient-text mt-1">{session.name}</h2>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <SummaryCard label="إجمالي الوارد" value={totals.received} accent="primary" />
-        <SummaryCard label="تم تصليحه" value={totals.repaired} accent="success" />
-        <SummaryCard label="تم تسليمه للمركز" value={totals.delivered} accent="warning" />
+      <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-3">
+        {BUILTIN_KEYS.map(k => (
+          <SummaryCard key={k} label={labelFor(fields, k, k)} value={totals[k] ?? 0} accent={accentMap[k]} />
+        ))}
       </div>
+      {extras.length > 0 && (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {extras.map(f => <SummaryCard key={f.id} label={f.label} value={totals[f.key] ?? 0} accent="primary" />)}
+        </div>
+      )}
 
       <section className="glass rounded-2xl p-6">
         <h3 className="text-xl font-bold mb-4">إضافة تقرير جديد</h3>
@@ -270,18 +302,20 @@ function WorkshopView({ session, onLogout }: {
             <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })}
               className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
           </Field>
-          <Field label="عدد العدادات الواردة">
-            <input type="number" min={0} value={form.received} onChange={e => setForm({ ...form, received: e.target.value })}
-              placeholder="0" className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
-          </Field>
-          <Field label="عدد التي تم تصليحها">
-            <input type="number" min={0} value={form.repaired} onChange={e => setForm({ ...form, repaired: e.target.value })}
-              placeholder="0" className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
-          </Field>
-          <Field label="عدد التي تم تسليمها">
-            <input type="number" min={0} value={form.delivered} onChange={e => setForm({ ...form, delivered: e.target.value })}
-              placeholder="0" className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
-          </Field>
+          {BUILTIN_KEYS.map(k => (
+            <Field key={k} label={labelFor(fields, k, k)}>
+              <input type="number" min={0} value={(form as any)[k]}
+                onChange={e => setForm({ ...form, [k]: e.target.value } as any)}
+                placeholder="0" className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
+            </Field>
+          ))}
+          {extras.map(f => (
+            <Field key={f.id} label={f.label}>
+              <input type="number" min={0} value={form.extra[f.key] ?? ""}
+                onChange={e => setForm({ ...form, extra: { ...form.extra, [f.key]: e.target.value } })}
+                placeholder="0" className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
+            </Field>
+          ))}
           <div className="sm:col-span-2 lg:col-span-4">
             <Field label="ملاحظات (اختياري)">
               <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={2}
@@ -298,7 +332,7 @@ function WorkshopView({ session, onLogout }: {
         <h3 className="text-xl font-bold mb-4">سجل التقارير</h3>
         {isLoading ? <p className="text-muted-foreground text-sm">جاري التحميل...</p>
           : reports.length === 0 ? <p className="text-muted-foreground text-sm">لا توجد تقارير بعد. ابدأ بإضافة تقرير جديد.</p>
-          : <ReportsTable reports={reports} />}
+          : <ReportsTable reports={reports} fields={fields} />}
       </section>
 
       <button onClick={onLogout} className="text-sm text-muted-foreground hover:text-foreground">خروج من حساب الورشة →</button>
@@ -320,16 +354,18 @@ function SummaryCard({ label, value, accent }: { label: string; value: number; a
   );
 }
 
-function ReportsTable({ reports }: { reports: Report[] }) {
+function ReportsTable({ reports, fields }: { reports: Report[]; fields: FieldConfig[] }) {
+  const extras = customFields(fields);
   return (
     <div className="overflow-x-auto -mx-2">
       <table className="w-full text-sm">
         <thead>
           <tr className="text-right text-muted-foreground border-b border-border">
             <th className="py-3 px-2">التاريخ</th>
-            <th className="py-3 px-2">الوارد</th>
-            <th className="py-3 px-2">تم تصليحه</th>
-            <th className="py-3 px-2">تم تسليمه</th>
+            <th className="py-3 px-2">{labelFor(fields, "received", "الوارد")}</th>
+            <th className="py-3 px-2">{labelFor(fields, "repaired", "تم تصليحه")}</th>
+            <th className="py-3 px-2">{labelFor(fields, "delivered", "تم تسليمه")}</th>
+            {extras.map(f => <th key={f.id} className="py-3 px-2">{f.label}</th>)}
             <th className="py-3 px-2">ملاحظات</th>
           </tr>
         </thead>
@@ -340,6 +376,9 @@ function ReportsTable({ reports }: { reports: Report[] }) {
               <td className="py-3 px-2 font-semibold text-primary">{r.received}</td>
               <td className="py-3 px-2 font-semibold text-success">{r.repaired}</td>
               <td className="py-3 px-2 font-semibold text-warning">{r.delivered}</td>
+              {extras.map(f => (
+                <td key={f.id} className="py-3 px-2 font-semibold">{Number((r.extra as any)?.[f.key] ?? 0)}</td>
+              ))}
               <td className="py-3 px-2 text-muted-foreground">{r.notes || "—"}</td>
             </tr>
           ))}
@@ -351,7 +390,7 @@ function ReportsTable({ reports }: { reports: Report[] }) {
 
 // ============ ADMIN VIEW ============
 function AdminView({ password }: { password: string }) {
-  const [tab, setTab] = useState<"summary" | "passwords" | "settings">("summary");
+  const [tab, setTab] = useState<"summary" | "passwords" | "fields" | "settings">("summary");
   return (
     <div className="space-y-6">
       <div className="glass rounded-2xl p-6">
@@ -359,20 +398,23 @@ function AdminView({ password }: { password: string }) {
         <h2 className="text-3xl font-black gradient-text mt-1">واجهة الأدمن</h2>
       </div>
 
-      <div className="flex gap-2 p-1 rounded-xl bg-secondary/60 max-w-xl">
+      <div className="flex flex-wrap gap-2 p-1 rounded-xl bg-secondary/60 max-w-2xl">
         <TabBtn active={tab === "summary"} onClick={() => setTab("summary")}>ملخص الورش</TabBtn>
         <TabBtn active={tab === "passwords"} onClick={() => setTab("passwords")}>كلمات المرور</TabBtn>
+        <TabBtn active={tab === "fields"} onClick={() => setTab("fields")}>الحقول</TabBtn>
         <TabBtn active={tab === "settings"} onClick={() => setTab("settings")}>إعدادات الأدمن</TabBtn>
       </div>
 
       {tab === "summary" && <AdminSummaryTab password={password} />}
       {tab === "passwords" && <AdminPasswordsTab password={password} />}
+      {tab === "fields" && <AdminFieldsTab password={password} />}
       {tab === "settings" && <AdminSettingsTab password={password} />}
     </div>
   );
 }
 
 function AdminSummaryTab({ password }: { password: string }) {
+  const { data: fields = [] } = useFields();
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ["adminAll"], queryFn: () => adminGetAll(password),
   });
@@ -397,9 +439,9 @@ function AdminSummaryTab({ password }: { password: string }) {
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-3">
-        <SummaryCard label="إجمالي الوارد لكل الورش" value={grand.received} accent="primary" />
-        <SummaryCard label="إجمالي تم تصليحه" value={grand.repaired} accent="success" />
-        <SummaryCard label="إجمالي تم تسليمه" value={grand.delivered} accent="warning" />
+        <SummaryCard label={`إجمالي ${labelFor(fields, "received", "الوارد")}`} value={grand.received} accent="primary" />
+        <SummaryCard label={`إجمالي ${labelFor(fields, "repaired", "تم تصليحه")}`} value={grand.repaired} accent="success" />
+        <SummaryCard label={`إجمالي ${labelFor(fields, "delivered", "تم تسليمه")}`} value={grand.delivered} accent="warning" />
       </div>
 
       <div className="flex flex-wrap gap-3">
@@ -417,16 +459,16 @@ function AdminSummaryTab({ password }: { password: string }) {
             <thead>
               <tr className="text-right text-muted-foreground border-b border-border">
                 <th className="py-3 px-3">الورشة</th>
-                <th className="py-3 px-3">الوارد</th>
-                <th className="py-3 px-3">تم تصليحه</th>
-                <th className="py-3 px-3">تم تسليمه</th>
+                <th className="py-3 px-3">{labelFor(fields, "received", "الوارد")}</th>
+                <th className="py-3 px-3">{labelFor(fields, "repaired", "تم تصليحه")}</th>
+                <th className="py-3 px-3">{labelFor(fields, "delivered", "تم تسليمه")}</th>
                 <th className="py-3 px-3">عدد التقارير</th>
                 <th className="py-3 px-3"></th>
               </tr>
             </thead>
             <tbody>
               {rows.map(r => (
-                <RowWithDetails key={r.workshop_id} row={r} adminPassword={password}
+                <RowWithDetails key={r.workshop_id} row={r} adminPassword={password} fields={fields}
                   open={openId === r.workshop_id} onToggle={() => setOpenId(openId === r.workshop_id ? null : r.workshop_id)} />
               ))}
             </tbody>
@@ -437,8 +479,8 @@ function AdminSummaryTab({ password }: { password: string }) {
   );
 }
 
-function RowWithDetails({ row, adminPassword, open, onToggle }:
-  { row: AdminSummary; adminPassword: string; open: boolean; onToggle: () => void }) {
+function RowWithDetails({ row, adminPassword, fields, open, onToggle }:
+  { row: AdminSummary; adminPassword: string; fields: FieldConfig[]; open: boolean; onToggle: () => void }) {
   return (
     <>
       <tr className="border-b border-border/50 hover:bg-secondary/30">
@@ -455,15 +497,16 @@ function RowWithDetails({ row, adminPassword, open, onToggle }:
       </tr>
       {open && (
         <tr><td colSpan={6} className="bg-background/40 p-4">
-          <WorkshopReportsAdmin adminPassword={adminPassword} workshopId={row.workshop_id} />
+          <WorkshopReportsAdmin adminPassword={adminPassword} workshopId={row.workshop_id} fields={fields} />
         </td></tr>
       )}
     </>
   );
 }
 
-function WorkshopReportsAdmin({ adminPassword, workshopId }: { adminPassword: string; workshopId: string }) {
+function WorkshopReportsAdmin({ adminPassword, workshopId, fields }: { adminPassword: string; workshopId: string; fields: FieldConfig[] }) {
   const qc = useQueryClient();
+  const extras = customFields(fields);
   const { data: reports = [], isLoading } = useQuery({
     queryKey: ["adminReports", workshopId],
     queryFn: () => adminGetReports(adminPassword, workshopId),
@@ -486,13 +529,16 @@ function WorkshopReportsAdmin({ adminPassword, workshopId }: { adminPassword: st
   return (
     <div className="space-y-2">
       {reports.map(r => editingId === r.id
-        ? <EditReportForm key={r.id} report={r} adminPassword={adminPassword} workshopId={workshopId} onClose={() => setEditingId(null)} />
+        ? <EditReportForm key={r.id} report={r} adminPassword={adminPassword} workshopId={workshopId} fields={fields} onClose={() => setEditingId(null)} />
         : (
           <div key={r.id} className="flex flex-wrap items-center gap-3 rounded-lg bg-card/60 border border-border/50 p-3 text-sm">
             <span className="text-muted-foreground">{r.report_date}</span>
-            <span>وارد: <b className="text-primary">{r.received}</b></span>
-            <span>تصليح: <b className="text-success">{r.repaired}</b></span>
-            <span>تسليم: <b className="text-warning">{r.delivered}</b></span>
+            <span>{labelFor(fields, "received", "وارد")}: <b className="text-primary">{r.received}</b></span>
+            <span>{labelFor(fields, "repaired", "تصليح")}: <b className="text-success">{r.repaired}</b></span>
+            <span>{labelFor(fields, "delivered", "تسليم")}: <b className="text-warning">{r.delivered}</b></span>
+            {extras.map(f => (
+              <span key={f.id}>{f.label}: <b>{Number((r.extra as any)?.[f.key] ?? 0)}</b></span>
+            ))}
             {r.notes && <span className="text-muted-foreground">— {r.notes}</span>}
             <div className="ms-auto flex gap-2">
               <button onClick={() => setEditingId(r.id)} className="rounded border border-border px-2 py-1 text-xs hover:bg-secondary">تعديل</button>
@@ -506,18 +552,24 @@ function WorkshopReportsAdmin({ adminPassword, workshopId }: { adminPassword: st
   );
 }
 
-function EditReportForm({ report, adminPassword, workshopId, onClose }:
-  { report: Report; adminPassword: string; workshopId: string; onClose: () => void }) {
+function EditReportForm({ report, adminPassword, workshopId, fields, onClose }:
+  { report: Report; adminPassword: string; workshopId: string; fields: FieldConfig[]; onClose: () => void }) {
   const qc = useQueryClient();
+  const extras = customFields(fields);
   const [f, setF] = useState({
-    date: report.report_date, received: String(report.received),
-    repaired: String(report.repaired), delivered: String(report.delivered),
+    date: report.report_date,
+    received: String(report.received),
+    repaired: String(report.repaired),
+    delivered: String(report.delivered),
     notes: report.notes ?? "",
+    extra: Object.fromEntries(extras.map(x => [x.key, String((report.extra as any)?.[x.key] ?? "")])) as Record<string, string>,
   });
   const mut = useMutation({
     mutationFn: () => adminUpdateReport({
       adminPassword, reportId: report.id, date: f.date,
-      received: Number(f.received), repaired: Number(f.repaired), delivered: Number(f.delivered), notes: f.notes,
+      received: Number(f.received), repaired: Number(f.repaired), delivered: Number(f.delivered),
+      notes: f.notes,
+      extra: Object.fromEntries(extras.map(x => [x.key, Number(f.extra[x.key] || 0)])),
     }),
     onSuccess: () => {
       toast.success("تم التحديث");
@@ -530,10 +582,15 @@ function EditReportForm({ report, adminPassword, workshopId, onClose }:
   return (
     <form onSubmit={e => { e.preventDefault(); mut.mutate(); }} className="grid gap-2 sm:grid-cols-6 rounded-lg bg-card border border-primary/40 p-3 text-sm">
       <input type="date" value={f.date} onChange={e => setF({ ...f, date: e.target.value })} className="rounded bg-input border border-border px-2 py-1.5" />
-      <input type="number" min={0} value={f.received} onChange={e => setF({ ...f, received: e.target.value })} className="rounded bg-input border border-border px-2 py-1.5" placeholder="وارد" />
-      <input type="number" min={0} value={f.repaired} onChange={e => setF({ ...f, repaired: e.target.value })} className="rounded bg-input border border-border px-2 py-1.5" placeholder="تصليح" />
-      <input type="number" min={0} value={f.delivered} onChange={e => setF({ ...f, delivered: e.target.value })} className="rounded bg-input border border-border px-2 py-1.5" placeholder="تسليم" />
+      <input type="number" min={0} value={f.received} onChange={e => setF({ ...f, received: e.target.value })} className="rounded bg-input border border-border px-2 py-1.5" placeholder={labelFor(fields, "received", "وارد")} />
+      <input type="number" min={0} value={f.repaired} onChange={e => setF({ ...f, repaired: e.target.value })} className="rounded bg-input border border-border px-2 py-1.5" placeholder={labelFor(fields, "repaired", "تصليح")} />
+      <input type="number" min={0} value={f.delivered} onChange={e => setF({ ...f, delivered: e.target.value })} className="rounded bg-input border border-border px-2 py-1.5" placeholder={labelFor(fields, "delivered", "تسليم")} />
       <input value={f.notes} onChange={e => setF({ ...f, notes: e.target.value })} className="rounded bg-input border border-border px-2 py-1.5 sm:col-span-2" placeholder="ملاحظات" />
+      {extras.map(x => (
+        <input key={x.id} type="number" min={0} value={f.extra[x.key] ?? ""}
+          onChange={e => setF({ ...f, extra: { ...f.extra, [x.key]: e.target.value } })}
+          placeholder={x.label} className="rounded bg-input border border-border px-2 py-1.5" />
+      ))}
       <div className="sm:col-span-6 flex gap-2 justify-end">
         <button type="button" onClick={onClose} className="rounded border border-border px-3 py-1.5 text-xs">إلغاء</button>
         <button disabled={mut.isPending} className="btn-primary-grad rounded px-3 py-1.5 text-xs">{mut.isPending ? "..." : "حفظ"}</button>
@@ -569,6 +626,89 @@ function PasswordRow({ workshop, adminPassword }: { workshop: Workshop; adminPas
       <button type="button" onClick={() => setShow(!show)} className="text-xs text-muted-foreground hover:text-foreground">{show ? "إخفاء" : "إظهار"}</button>
       <button disabled={mut.isPending || !val} className="btn-primary-grad rounded px-4 py-2 text-xs">{mut.isPending ? "..." : "حفظ"}</button>
     </form>
+  );
+}
+
+// ============ ADMIN FIELDS TAB ============
+function AdminFieldsTab({ password }: { password: string }) {
+  const qc = useQueryClient();
+  const { data: fields = [], isLoading } = useQuery({
+    queryKey: ["adminFields"], queryFn: () => adminListFields(password),
+  });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["adminFields"] });
+    qc.invalidateQueries({ queryKey: ["fields"] });
+  };
+
+  const [newKey, setNewKey] = useState("");
+  const [newLabel, setNewLabel] = useState("");
+  const addMut = useMutation({
+    mutationFn: () => adminAddField(password, newKey.trim(), newLabel.trim()),
+    onSuccess: () => { toast.success("تم إضافة الحقل"); setNewKey(""); setNewLabel(""); invalidate(); },
+    onError: (e: any) => toast.error(e.message ?? "خطأ"),
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="glass rounded-2xl p-6 space-y-3">
+        <h3 className="text-lg font-bold mb-2">تعديل أسماء الحقول</h3>
+        <p className="text-xs text-muted-foreground mb-3">
+          يمكنك تعديل الاسم المعروض للحقول الأساسية (الوارد، تم تصليحه، تم تسليمه) وكذلك الحقول المخصصة. الحقول المخصصة فقط يمكن حذفها.
+        </p>
+        {isLoading ? <p className="text-muted-foreground text-sm">جاري التحميل...</p>
+          : fields.map(f => <FieldRow key={f.id} field={f} adminPassword={password} onChange={invalidate} />)}
+      </div>
+
+      <div className="glass rounded-2xl p-6 space-y-3 max-w-2xl">
+        <h3 className="text-lg font-bold mb-2">إضافة حقل جديد</h3>
+        <p className="text-xs text-muted-foreground">
+          المفتاح (key) باللغة الإنجليزية بدون مسافات — يُستخدم داخلياً ولا يمكن تغييره لاحقاً. الاسم المعروض بالعربية.
+        </p>
+        <form onSubmit={e => {
+          e.preventDefault();
+          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(newKey)) return toast.error("المفتاح يجب أن يبدأ بحرف إنجليزي ويحتوي حروف/أرقام/_ فقط");
+          if (newLabel.trim().length < 2) return toast.error("اكتب اسماً للحقل");
+          addMut.mutate();
+        }} className="grid gap-3 sm:grid-cols-3">
+          <input value={newKey} onChange={e => setNewKey(e.target.value)} placeholder="key (e.g. tested)"
+            className="rounded-lg bg-input border border-border px-3 py-2.5 text-sm" />
+          <input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="الاسم المعروض"
+            className="rounded-lg bg-input border border-border px-3 py-2.5 text-sm" />
+          <button disabled={addMut.isPending} className="btn-primary-grad rounded-lg px-4 py-2.5 text-sm">
+            {addMut.isPending ? "..." : "+ إضافة حقل"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function FieldRow({ field, adminPassword, onChange }: { field: FieldConfig; adminPassword: string; onChange: () => void }) {
+  const [label, setLabel] = useState(field.label);
+  const upd = useMutation({
+    mutationFn: () => adminUpdateFieldLabel(adminPassword, field.id, label.trim()),
+    onSuccess: () => { toast.success("تم التحديث"); onChange(); },
+    onError: (e: any) => toast.error(e.message ?? "خطأ"),
+  });
+  const del = useMutation({
+    mutationFn: () => adminDeleteField(adminPassword, field.id),
+    onSuccess: () => { toast.success("تم الحذف"); onChange(); },
+    onError: (e: any) => toast.error(e.message ?? "خطأ"),
+  });
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-lg bg-card/60 border border-border/50 p-3">
+      <code className="text-xs text-muted-foreground min-w-[6rem]">{field.key}</code>
+      {field.is_builtin && <span className="text-[10px] rounded bg-primary/20 text-primary px-2 py-0.5">أساسي</span>}
+      <input value={label} onChange={e => setLabel(e.target.value)}
+        className="rounded bg-input border border-border px-3 py-2 text-sm flex-1 min-w-[12rem]" />
+      <button onClick={() => { if (label.trim().length < 2) return toast.error("الاسم قصير"); upd.mutate(); }}
+        disabled={upd.isPending || label === field.label}
+        className="btn-primary-grad rounded px-4 py-2 text-xs">{upd.isPending ? "..." : "حفظ"}</button>
+      {!field.is_builtin && (
+        <button onClick={() => { if (confirm(`حذف الحقل "${field.label}"؟ القيم المسجّلة ستبقى مخزنة لكن لن تُعرض.`)) del.mutate(); }}
+          className="rounded border border-destructive/50 text-destructive px-3 py-2 text-xs hover:bg-destructive/10">حذف</button>
+      )}
+    </div>
   );
 }
 
