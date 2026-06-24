@@ -145,6 +145,7 @@ export async function adminUpdateMasterPassword(oldPass: string, newPass: string
 export async function adminUpdateReport(args: {
   adminPassword: string; reportId: string; date: string;
   received: number; repaired: number; delivered: number; notes?: string;
+  extra?: Record<string, number>;
 }) {
   const { error } = await supabase.rpc("admin_update_report", {
     p_admin_password: args.adminPassword,
@@ -154,6 +155,7 @@ export async function adminUpdateReport(args: {
     p_repaired: args.repaired,
     p_delivered: args.delivered,
     p_notes: (args.notes ?? "") as string,
+    p_extra: (args.extra ?? null) as never,
   });
   if (error) throw error;
 }
