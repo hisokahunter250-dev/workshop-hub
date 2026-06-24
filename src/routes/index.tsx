@@ -3,21 +3,26 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
-  listWorkshops, loginWorkshop, loginAdmin,
+  listWorkshops, loginWorkshop, adminLogin,
   getWorkshopReports, addReport,
   adminGetAll, adminGetReports, adminUpdateWorkshopPassword,
   adminUpdateMasterPassword, adminUpdateReport, adminDeleteReport,
   listFields, adminListFields, adminUpdateFieldLabel, adminAddField, adminDeleteField,
+  adminAddWorkshop, adminDeleteWorkshop,
+  adminListAdmins, adminAddAdmin, adminUpdateAdmin, adminDeleteAdmin,
+  getSettings, adminUpdateSettings,
+  ALL_PERMISSIONS,
   BUILTIN_KEYS,
   type Workshop, type Report, type AdminSummary, type FieldConfig,
+  type PermissionKey, type AdminUser,
 } from "@/lib/api";
-import { exportAdminExcel, exportAdminPDF } from "@/lib/export";
+import { exportAdminExcel, exportAdminPDF, exportDailyPDF } from "@/lib/export";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "نظام تقارير الورش — صيانة العدادات" },
-      { name: "description", content: "نظام إدارة تقارير صيانة العدادات للورش — ادخل ببيانات ورشتك أو كأدمن لعرض كل البيانات" },
+      { name: "description", content: "نظام إدارة تقارير صيانة العدادات للورش" },
     ],
   }),
   component: HomePage,
@@ -26,9 +31,9 @@ export const Route = createFileRoute("/")({
 type Session =
   | { kind: "none" }
   | { kind: "workshop"; id: string; name: string; password: string }
-  | { kind: "admin"; password: string };
+  | { kind: "admin"; password: string; isMaster: boolean; username: string; permissions: PermissionKey[] };
 
-const SESSION_KEY = "workshop_session_v1";
+const SESSION_KEY = "workshop_session_v2";
 
 function loadSession(): Session {
   if (typeof window === "undefined") return { kind: "none" };
@@ -44,7 +49,6 @@ function saveSession(s: Session) {
   else localStorage.setItem(SESSION_KEY, JSON.stringify(s));
 }
 
-// helpers for field labels
 function useFields() {
   return useQuery({ queryKey: ["fields"], queryFn: listFields, staleTime: 30_000 });
 }
@@ -55,17 +59,28 @@ function customFields(fields: FieldConfig[]) {
   return fields.filter(f => !f.is_builtin);
 }
 
+function applyTheme(theme: "dark" | "light") {
+  if (typeof document === "undefined") return;
+  if (theme === "light") document.documentElement.setAttribute("data-theme", "light");
+  else document.documentElement.removeAttribute("data-theme");
+}
+
 function HomePage() {
   const [session, setSession] = useState<Session>({ kind: "none" });
   useEffect(() => { setSession(loadSession()); }, []);
   function setAndSave(s: Session) { setSession(s); saveSession(s); }
+
+  // Apply persisted theme from DB
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettings, staleTime: 30_000 });
+  useEffect(() => { if (settings?.theme) applyTheme(settings.theme); }, [settings?.theme]);
+
   return (
     <div className="min-h-screen">
       <Header session={session} onLogout={() => setAndSave({ kind: "none" })} />
       <main className="mx-auto max-w-7xl px-4 py-8 sm:py-12">
         {session.kind === "none" && <LoginScreen onLogin={setAndSave} />}
         {session.kind === "workshop" && <WorkshopView session={session} onLogout={() => setAndSave({ kind: "none" })} />}
-        {session.kind === "admin" && <AdminView password={session.password} />}
+        {session.kind === "admin" && <AdminView session={session} />}
       </main>
       <footer className="border-t border-border/50 py-6 text-center text-xs text-muted-foreground">
         نظام تقارير الورش © {new Date().getFullYear()}
@@ -76,7 +91,7 @@ function HomePage() {
 
 function Header({ session, onLogout }: { session: Session; onLogout: () => void }) {
   return (
-    <header className="border-b border-border/40 backdrop-blur-md sticky top-0 z-30" style={{ background: "oklch(0.16 0.025 250 / 0.7)" }}>
+    <header className="border-b border-border/40 backdrop-blur-md sticky top-0 z-30 header-bg">
       <div className="mx-auto max-w-7xl px-4 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="size-10 rounded-xl btn-primary-grad grid place-items-center text-lg">⚙</div>
@@ -108,11 +123,11 @@ function LoginScreen({ onLogin }: { onLogin: (s: Session) => void }) {
           <span className="gradient-text">لكل الورش في مكان واحد</span>
         </h2>
         <p className="mt-4 text-muted-foreground text-lg leading-relaxed max-w-xl">
-          كل ورشة تدخل ببياناتها وتسجل: العدد الوارد للصيانة، ما تم تصليحه، وما تم تسليمه للمركز.
-          والأدمن يطلع على إحصائيات كل الورش ويتحكم بكلمات المرور والبيانات والحقول.
+          كل ورشة تدخل ببياناتها وتسجل: العدد الوارد، ما تم تصليحه، وما تم تسليمه للمركز.
+          الأدمن يطلع على إحصائيات كل الورش، يدير الحقول، الورش، وكلمات المرور.
         </p>
         <div className="mt-6 grid grid-cols-3 gap-3 max-w-md">
-          <Stat label="ورشة" value="16" />
+          <Stat label="ورشة" value={`${workshops?.length ?? 16}`} />
           <Stat label="آمن" value="🔒" />
           <Stat label="فوري" value="⚡" />
         </div>
@@ -190,23 +205,23 @@ function AdminLogin({ onLogin }: { onLogin: (s: Session) => void }) {
     e.preventDefault();
     setSubmitting(true);
     try {
-      const ok = await loginAdmin(password);
-      if (!ok) { toast.error("كلمة مرور الأدمن غير صحيحة"); return; }
-      toast.success("أهلاً بك أيها المدير");
-      onLogin({ kind: "admin", password });
+      const res = await adminLogin(password);
+      if (!res) { toast.error("كلمة مرور الأدمن غير صحيحة"); return; }
+      toast.success(res.isMaster ? "أهلاً أيها المدير الرئيسي" : `أهلاً ${res.username}`);
+      onLogin({ kind: "admin", password, isMaster: res.isMaster, username: res.username, permissions: res.permissions });
     } catch (e: any) { toast.error(e.message ?? "خطأ"); }
     finally { setSubmitting(false); }
   }
   return (
     <form onSubmit={submit} className="space-y-4">
-      <Field label="كلمة مرور الماستر">
+      <Field label="كلمة مرور الأدمن">
         <input type="password" value={password} onChange={e => setPassword(e.target.value)}
           placeholder="••••••••" className="w-full rounded-lg bg-input border border-border px-3 py-2.5 outline-none focus:ring-2 focus:ring-primary" />
       </Field>
       <button disabled={submitting} className="w-full btn-primary-grad rounded-lg px-4 py-3 text-sm">
         {submitting ? "جاري الدخول..." : "دخول كأدمن"}
       </button>
-      <p className="text-xs text-muted-foreground text-center">كلمة المرور الافتراضية: <code className="text-primary">admin123</code></p>
+      <p className="text-xs text-muted-foreground text-center">الافتراضي للماستر: <code className="text-primary">admin123</code></p>
     </form>
   );
 }
@@ -331,11 +346,11 @@ function WorkshopView({ session, onLogout }: {
       <section className="glass rounded-2xl p-6">
         <h3 className="text-xl font-bold mb-4">سجل التقارير</h3>
         {isLoading ? <p className="text-muted-foreground text-sm">جاري التحميل...</p>
-          : reports.length === 0 ? <p className="text-muted-foreground text-sm">لا توجد تقارير بعد. ابدأ بإضافة تقرير جديد.</p>
+          : reports.length === 0 ? <p className="text-muted-foreground text-sm">لا توجد تقارير بعد.</p>
           : <ReportsTable reports={reports} fields={fields} />}
       </section>
 
-      <button onClick={onLogout} className="text-sm text-muted-foreground hover:text-foreground">خروج من حساب الورشة →</button>
+      <button onClick={onLogout} className="text-sm text-muted-foreground hover:text-foreground">خروج →</button>
     </div>
   );
 }
@@ -389,36 +404,63 @@ function ReportsTable({ reports, fields }: { reports: Report[]; fields: FieldCon
 }
 
 // ============ ADMIN VIEW ============
-function AdminView({ password }: { password: string }) {
-  const [tab, setTab] = useState<"summary" | "passwords" | "fields" | "settings">("summary");
+type AdminSession = Extract<Session, { kind: "admin" }>;
+
+function hasPerm(s: AdminSession, p: PermissionKey) {
+  return s.isMaster || s.permissions.includes(p);
+}
+
+function AdminView({ session }: { session: AdminSession }) {
+  const tabs: Array<{ id: string; label: string; perm?: PermissionKey }> = [
+    { id: "summary", label: "ملخص الورش", perm: "view_reports" },
+    { id: "passwords", label: "كلمات مرور الورش", perm: "manage_workshop_passwords" },
+    { id: "workshops", label: "إدارة الورش", perm: "manage_workshop_passwords" },
+    { id: "fields", label: "الحقول", perm: "manage_settings" },
+    { id: "admins", label: "الأدمنز الفرعيون", perm: "manage_settings" },
+    { id: "settings", label: "الإعدادات", perm: "manage_settings" },
+  ];
+  const visibleTabs = tabs.filter(t => !t.perm || hasPerm(session, t.perm));
+  const [tab, setTab] = useState<string>(visibleTabs[0]?.id ?? "summary");
+
   return (
     <div className="space-y-6">
       <div className="glass rounded-2xl p-6">
         <p className="text-sm text-muted-foreground">لوحة التحكم</p>
-        <h2 className="text-3xl font-black gradient-text mt-1">واجهة الأدمن</h2>
+        <h2 className="text-3xl font-black gradient-text mt-1">
+          {session.isMaster ? "أدمن رئيسي" : `أدمن: ${session.username}`}
+        </h2>
+        {!session.isMaster && (
+          <p className="text-xs text-muted-foreground mt-2">
+            الصلاحيات: {session.permissions.map(p => ALL_PERMISSIONS.find(x => x.key === p)?.label).join(" • ") || "لا صلاحيات"}
+          </p>
+        )}
       </div>
 
-      <div className="flex flex-wrap gap-2 p-1 rounded-xl bg-secondary/60 max-w-2xl">
-        <TabBtn active={tab === "summary"} onClick={() => setTab("summary")}>ملخص الورش</TabBtn>
-        <TabBtn active={tab === "passwords"} onClick={() => setTab("passwords")}>كلمات المرور</TabBtn>
-        <TabBtn active={tab === "fields"} onClick={() => setTab("fields")}>الحقول</TabBtn>
-        <TabBtn active={tab === "settings"} onClick={() => setTab("settings")}>إعدادات الأدمن</TabBtn>
+      <div className="flex flex-wrap gap-2 p-1 rounded-xl bg-secondary/60">
+        {visibleTabs.map(t => (
+          <TabBtn key={t.id} active={tab === t.id} onClick={() => setTab(t.id)}>{t.label}</TabBtn>
+        ))}
       </div>
 
-      {tab === "summary" && <AdminSummaryTab password={password} />}
-      {tab === "passwords" && <AdminPasswordsTab password={password} />}
-      {tab === "fields" && <AdminFieldsTab password={password} />}
-      {tab === "settings" && <AdminSettingsTab password={password} />}
+      {tab === "summary" && hasPerm(session, "view_reports") && <AdminSummaryTab session={session} />}
+      {tab === "passwords" && hasPerm(session, "manage_workshop_passwords") && <AdminPasswordsTab password={session.password} />}
+      {tab === "workshops" && hasPerm(session, "manage_workshop_passwords") && <AdminWorkshopsTab password={session.password} />}
+      {tab === "fields" && hasPerm(session, "manage_settings") && <AdminFieldsTab password={session.password} />}
+      {tab === "admins" && hasPerm(session, "manage_settings") && <AdminSubAdminsTab password={session.password} />}
+      {tab === "settings" && hasPerm(session, "manage_settings") && <AdminSettingsTab session={session} />}
     </div>
   );
 }
 
-function AdminSummaryTab({ password }: { password: string }) {
+function AdminSummaryTab({ session }: { session: AdminSession }) {
+  const password = session.password;
   const { data: fields = [] } = useFields();
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ["adminAll"], queryFn: () => adminGetAll(password),
   });
   const [openId, setOpenId] = useState<string | null>(null);
+  const [dailyDate, setDailyDate] = useState(new Date().toISOString().slice(0, 10));
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettings });
 
   const grand = useMemo(() => rows.reduce(
     (a, r) => ({ received: a.received + Number(r.total_received), repaired: a.repaired + Number(r.total_repaired), delivered: a.delivered + Number(r.total_delivered) }),
@@ -428,11 +470,15 @@ function AdminSummaryTab({ password }: { password: string }) {
   if (isLoading) return <p className="text-muted-foreground">جاري التحميل...</p>;
 
   async function handleExcel() {
-    try { await exportAdminExcel(password, rows); toast.success("تم تصدير ملف Excel"); }
+    try { await exportAdminExcel(password, rows); toast.success("تم تصدير Excel"); }
     catch (e: any) { toast.error(e.message ?? "فشل التصدير"); }
   }
   async function handlePDF() {
     try { await exportAdminPDF(password, rows); }
+    catch (e: any) { toast.error(e.message ?? "فشل التصدير"); }
+  }
+  async function handleDailyPDF() {
+    try { await exportDailyPDF(password, dailyDate, rows, settings?.notification_email); }
     catch (e: any) { toast.error(e.message ?? "فشل التصدير"); }
   }
 
@@ -444,13 +490,23 @@ function AdminSummaryTab({ password }: { password: string }) {
         <SummaryCard label={`إجمالي ${labelFor(fields, "delivered", "تم تسليمه")}`} value={grand.delivered} accent="warning" />
       </div>
 
-      <div className="flex flex-wrap gap-3">
-        <button onClick={handleExcel} className="btn-primary-grad rounded-lg px-5 py-2.5 text-sm inline-flex items-center gap-2">
-          📊 تصدير Excel
-        </button>
-        <button onClick={handlePDF} className="rounded-lg border border-border bg-secondary/60 hover:bg-secondary px-5 py-2.5 text-sm inline-flex items-center gap-2">
-          📄 تصدير PDF / طباعة
-        </button>
+      <div className="glass rounded-2xl p-4 space-y-3">
+        <h3 className="font-bold">تصدير التقارير</h3>
+        <div className="flex flex-wrap gap-3 items-end">
+          <button onClick={handleExcel} className="btn-primary-grad rounded-lg px-5 py-2.5 text-sm">📊 تصدير Excel</button>
+          <button onClick={handlePDF} className="rounded-lg border border-border bg-secondary/60 hover:bg-secondary px-5 py-2.5 text-sm">📄 تصدير PDF شامل</button>
+          <div className="h-8 w-px bg-border mx-1" />
+          <Field label="تقرير يومي بتاريخ">
+            <input type="date" value={dailyDate} onChange={e => setDailyDate(e.target.value)}
+              className="rounded-lg bg-input border border-border px-3 py-2.5 text-sm" />
+          </Field>
+          <button onClick={handleDailyPDF} className="btn-primary-grad rounded-lg px-5 py-2.5 text-sm">
+            📅 تصدير التقرير اليومي
+          </button>
+        </div>
+        {settings?.notification_email && (
+          <p className="text-xs text-muted-foreground">سيظهر زر «إرسال للبريد» داخل التقرير اليومي للإيميل: <code className="text-primary">{settings.notification_email}</code></p>
+        )}
       </div>
 
       <div className="glass rounded-2xl p-2 sm:p-4">
@@ -468,7 +524,7 @@ function AdminSummaryTab({ password }: { password: string }) {
             </thead>
             <tbody>
               {rows.map(r => (
-                <RowWithDetails key={r.workshop_id} row={r} adminPassword={password} fields={fields}
+                <RowWithDetails key={r.workshop_id} row={r} session={session} fields={fields}
                   open={openId === r.workshop_id} onToggle={() => setOpenId(openId === r.workshop_id ? null : r.workshop_id)} />
               ))}
             </tbody>
@@ -479,8 +535,8 @@ function AdminSummaryTab({ password }: { password: string }) {
   );
 }
 
-function RowWithDetails({ row, adminPassword, fields, open, onToggle }:
-  { row: AdminSummary; adminPassword: string; fields: FieldConfig[]; open: boolean; onToggle: () => void }) {
+function RowWithDetails({ row, session, fields, open, onToggle }:
+  { row: AdminSummary; session: AdminSession; fields: FieldConfig[]; open: boolean; onToggle: () => void }) {
   return (
     <>
       <tr className="border-b border-border/50 hover:bg-secondary/30">
@@ -491,30 +547,31 @@ function RowWithDetails({ row, adminPassword, fields, open, onToggle }:
         <td className="py-3 px-3">{Number(row.reports_count)}</td>
         <td className="py-3 px-3">
           <button onClick={onToggle} className="rounded-lg border border-border bg-secondary/60 px-3 py-1.5 text-xs hover:bg-secondary">
-            {open ? "إخفاء التفاصيل" : "عرض التقارير"}
+            {open ? "إخفاء" : "عرض التقارير"}
           </button>
         </td>
       </tr>
       {open && (
         <tr><td colSpan={6} className="bg-background/40 p-4">
-          <WorkshopReportsAdmin adminPassword={adminPassword} workshopId={row.workshop_id} fields={fields} />
+          <WorkshopReportsAdmin session={session} workshopId={row.workshop_id} fields={fields} />
         </td></tr>
       )}
     </>
   );
 }
 
-function WorkshopReportsAdmin({ adminPassword, workshopId, fields }: { adminPassword: string; workshopId: string; fields: FieldConfig[] }) {
+function WorkshopReportsAdmin({ session, workshopId, fields }: { session: AdminSession; workshopId: string; fields: FieldConfig[] }) {
   const qc = useQueryClient();
   const extras = customFields(fields);
+  const canEdit = hasPerm(session, "edit_reports");
   const { data: reports = [], isLoading } = useQuery({
     queryKey: ["adminReports", workshopId],
-    queryFn: () => adminGetReports(adminPassword, workshopId),
+    queryFn: () => adminGetReports(session.password, workshopId),
   });
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const delMut = useMutation({
-    mutationFn: (reportId: string) => adminDeleteReport(adminPassword, reportId),
+    mutationFn: (reportId: string) => adminDeleteReport(session.password, reportId),
     onSuccess: () => {
       toast.success("تم الحذف");
       qc.invalidateQueries({ queryKey: ["adminReports", workshopId] });
@@ -524,12 +581,12 @@ function WorkshopReportsAdmin({ adminPassword, workshopId, fields }: { adminPass
   });
 
   if (isLoading) return <p className="text-muted-foreground text-sm">جاري التحميل...</p>;
-  if (reports.length === 0) return <p className="text-muted-foreground text-sm">لا توجد تقارير لهذه الورشة.</p>;
+  if (reports.length === 0) return <p className="text-muted-foreground text-sm">لا توجد تقارير.</p>;
 
   return (
     <div className="space-y-2">
       {reports.map(r => editingId === r.id
-        ? <EditReportForm key={r.id} report={r} adminPassword={adminPassword} workshopId={workshopId} fields={fields} onClose={() => setEditingId(null)} />
+        ? <EditReportForm key={r.id} report={r} adminPassword={session.password} workshopId={workshopId} fields={fields} onClose={() => setEditingId(null)} />
         : (
           <div key={r.id} className="flex flex-wrap items-center gap-3 rounded-lg bg-card/60 border border-border/50 p-3 text-sm">
             <span className="text-muted-foreground">{r.report_date}</span>
@@ -540,11 +597,13 @@ function WorkshopReportsAdmin({ adminPassword, workshopId, fields }: { adminPass
               <span key={f.id}>{f.label}: <b>{Number((r.extra as any)?.[f.key] ?? 0)}</b></span>
             ))}
             {r.notes && <span className="text-muted-foreground">— {r.notes}</span>}
-            <div className="ms-auto flex gap-2">
-              <button onClick={() => setEditingId(r.id)} className="rounded border border-border px-2 py-1 text-xs hover:bg-secondary">تعديل</button>
-              <button onClick={() => { if (confirm("حذف هذا التقرير؟")) delMut.mutate(r.id); }}
-                className="rounded border border-destructive/50 text-destructive px-2 py-1 text-xs hover:bg-destructive/10">حذف</button>
-            </div>
+            {canEdit && (
+              <div className="ms-auto flex gap-2">
+                <button onClick={() => setEditingId(r.id)} className="rounded border border-border px-2 py-1 text-xs hover:bg-secondary">تعديل</button>
+                <button onClick={() => { if (confirm("حذف هذا التقرير؟")) delMut.mutate(r.id); }}
+                  className="rounded border border-destructive/50 text-destructive px-2 py-1 text-xs hover:bg-destructive/10">حذف</button>
+              </div>
+            )}
           </div>
         )
       )}
@@ -599,6 +658,7 @@ function EditReportForm({ report, adminPassword, workshopId, fields, onClose }:
   );
 }
 
+// ============ PASSWORDS TAB ============
 function AdminPasswordsTab({ password }: { password: string }) {
   const { data: workshops = [] } = useQuery({ queryKey: ["workshops"], queryFn: listWorkshops });
   return (
@@ -614,7 +674,7 @@ function PasswordRow({ workshop, adminPassword }: { workshop: Workshop; adminPas
   const [show, setShow] = useState(false);
   const mut = useMutation({
     mutationFn: () => adminUpdateWorkshopPassword(adminPassword, workshop.id, val),
-    onSuccess: () => { toast.success(`تم تحديث كلمة مرور ${workshop.name}`); setVal(""); },
+    onSuccess: () => { toast.success(`تم تحديث ${workshop.name}`); setVal(""); },
     onError: (e: any) => toast.error(e.message ?? "خطأ"),
   });
   return (
@@ -629,7 +689,65 @@ function PasswordRow({ workshop, adminPassword }: { workshop: Workshop; adminPas
   );
 }
 
-// ============ ADMIN FIELDS TAB ============
+// ============ WORKSHOPS MANAGEMENT TAB ============
+function AdminWorkshopsTab({ password }: { password: string }) {
+  const qc = useQueryClient();
+  const { data: workshops = [], isLoading } = useQuery({ queryKey: ["workshops"], queryFn: listWorkshops });
+  const [name, setName] = useState("");
+  const [pw, setPw] = useState("1234");
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["workshops"] });
+    qc.invalidateQueries({ queryKey: ["adminAll"] });
+  };
+  const addMut = useMutation({
+    mutationFn: () => adminAddWorkshop(password, name.trim(), pw),
+    onSuccess: () => { toast.success("تمت الإضافة"); setName(""); setPw("1234"); invalidate(); },
+    onError: (e: any) => toast.error(e.message ?? "خطأ"),
+  });
+  const delMut = useMutation({
+    mutationFn: (id: string) => adminDeleteWorkshop(password, id),
+    onSuccess: () => { toast.success("تم الحذف"); invalidate(); },
+    onError: (e: any) => toast.error(e.message ?? "خطأ"),
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="glass rounded-2xl p-6 max-w-2xl">
+        <h3 className="text-lg font-bold mb-3">إضافة ورشة جديدة</h3>
+        <form onSubmit={e => {
+          e.preventDefault();
+          if (name.trim().length < 2) return toast.error("اكتب اسم الورشة");
+          if (pw.length < 3) return toast.error("كلمة المرور قصيرة");
+          addMut.mutate();
+        }} className="grid gap-3 sm:grid-cols-3">
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="اسم الورشة"
+            className="rounded-lg bg-input border border-border px-3 py-2.5 text-sm sm:col-span-1" />
+          <input value={pw} onChange={e => setPw(e.target.value)} placeholder="كلمة المرور"
+            className="rounded-lg bg-input border border-border px-3 py-2.5 text-sm" />
+          <button disabled={addMut.isPending} className="btn-primary-grad rounded-lg px-4 py-2.5 text-sm">
+            {addMut.isPending ? "..." : "+ إضافة"}
+          </button>
+        </form>
+      </div>
+
+      <div className="glass rounded-2xl p-6 space-y-2">
+        <h3 className="text-lg font-bold mb-2">الورش الحالية</h3>
+        {isLoading ? <p className="text-muted-foreground text-sm">جاري التحميل...</p>
+          : workshops.map(w => (
+            <div key={w.id} className="flex items-center gap-3 rounded-lg bg-card/60 border border-border/50 p-3">
+              <span className="font-semibold flex-1">{w.name}</span>
+              <button onClick={() => { if (confirm(`حذف ${w.name}؟ سيتم حذف كل تقاريرها.`)) delMut.mutate(w.id); }}
+                className="rounded border border-destructive/50 text-destructive px-3 py-1.5 text-xs hover:bg-destructive/10">
+                حذف
+              </button>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+// ============ FIELDS TAB ============
 function AdminFieldsTab({ password }: { password: string }) {
   const qc = useQueryClient();
   const { data: fields = [], isLoading } = useQuery({
@@ -639,12 +757,11 @@ function AdminFieldsTab({ password }: { password: string }) {
     qc.invalidateQueries({ queryKey: ["adminFields"] });
     qc.invalidateQueries({ queryKey: ["fields"] });
   };
-
   const [newKey, setNewKey] = useState("");
   const [newLabel, setNewLabel] = useState("");
   const addMut = useMutation({
     mutationFn: () => adminAddField(password, newKey.trim(), newLabel.trim()),
-    onSuccess: () => { toast.success("تم إضافة الحقل"); setNewKey(""); setNewLabel(""); invalidate(); },
+    onSuccess: () => { toast.success("تمت الإضافة"); setNewKey(""); setNewLabel(""); invalidate(); },
     onError: (e: any) => toast.error(e.message ?? "خطأ"),
   });
 
@@ -653,7 +770,7 @@ function AdminFieldsTab({ password }: { password: string }) {
       <div className="glass rounded-2xl p-6 space-y-3">
         <h3 className="text-lg font-bold mb-2">تعديل أسماء الحقول</h3>
         <p className="text-xs text-muted-foreground mb-3">
-          يمكنك تعديل الاسم المعروض للحقول الأساسية (الوارد، تم تصليحه، تم تسليمه) وكذلك الحقول المخصصة. الحقول المخصصة فقط يمكن حذفها.
+          غيّر الاسم المعروض لأي حقل. الحقول الأساسية محمية من الحذف.
         </p>
         {isLoading ? <p className="text-muted-foreground text-sm">جاري التحميل...</p>
           : fields.map(f => <FieldRow key={f.id} field={f} adminPassword={password} onChange={invalidate} />)}
@@ -662,15 +779,15 @@ function AdminFieldsTab({ password }: { password: string }) {
       <div className="glass rounded-2xl p-6 space-y-3 max-w-2xl">
         <h3 className="text-lg font-bold mb-2">إضافة حقل جديد</h3>
         <p className="text-xs text-muted-foreground">
-          المفتاح (key) باللغة الإنجليزية بدون مسافات — يُستخدم داخلياً ولا يمكن تغييره لاحقاً. الاسم المعروض بالعربية.
+          المفتاح بالإنجليزية بدون مسافات. الاسم المعروض بالعربية.
         </p>
         <form onSubmit={e => {
           e.preventDefault();
-          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(newKey)) return toast.error("المفتاح يجب أن يبدأ بحرف إنجليزي ويحتوي حروف/أرقام/_ فقط");
-          if (newLabel.trim().length < 2) return toast.error("اكتب اسماً للحقل");
+          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(newKey)) return toast.error("مفتاح غير صالح");
+          if (newLabel.trim().length < 2) return toast.error("اكتب اسماً");
           addMut.mutate();
         }} className="grid gap-3 sm:grid-cols-3">
-          <input value={newKey} onChange={e => setNewKey(e.target.value)} placeholder="key (e.g. tested)"
+          <input value={newKey} onChange={e => setNewKey(e.target.value)} placeholder="key (مثل tested)"
             className="rounded-lg bg-input border border-border px-3 py-2.5 text-sm" />
           <input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="الاسم المعروض"
             className="rounded-lg bg-input border border-border px-3 py-2.5 text-sm" />
@@ -705,36 +822,194 @@ function FieldRow({ field, adminPassword, onChange }: { field: FieldConfig; admi
         disabled={upd.isPending || label === field.label}
         className="btn-primary-grad rounded px-4 py-2 text-xs">{upd.isPending ? "..." : "حفظ"}</button>
       {!field.is_builtin && (
-        <button onClick={() => { if (confirm(`حذف الحقل "${field.label}"؟ القيم المسجّلة ستبقى مخزنة لكن لن تُعرض.`)) del.mutate(); }}
+        <button onClick={() => { if (confirm(`حذف "${field.label}"؟`)) del.mutate(); }}
           className="rounded border border-destructive/50 text-destructive px-3 py-2 text-xs hover:bg-destructive/10">حذف</button>
       )}
     </div>
   );
 }
 
-function AdminSettingsTab({ password }: { password: string }) {
-  const [oldP, setOldP] = useState(password);
-  const [newP, setNewP] = useState("");
-  const mut = useMutation({
-    mutationFn: () => adminUpdateMasterPassword(oldP, newP),
-    onSuccess: () => { toast.success("تم تغيير كلمة مرور الأدمن — سجّل خروج وادخل مجدداً"); setNewP(""); },
+// ============ SUB-ADMINS TAB ============
+function AdminSubAdminsTab({ password }: { password: string }) {
+  const qc = useQueryClient();
+  const { data: admins = [], isLoading } = useQuery({
+    queryKey: ["adminUsers"], queryFn: () => adminListAdmins(password),
+  });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["adminUsers"] });
+
+  const [username, setUsername] = useState("");
+  const [pw, setPw] = useState("");
+  const [perms, setPerms] = useState<PermissionKey[]>(["view_reports"]);
+
+  const addMut = useMutation({
+    mutationFn: () => adminAddAdmin(password, username.trim(), pw, perms),
+    onSuccess: () => { toast.success("تم إنشاء الأدمن"); setUsername(""); setPw(""); setPerms(["view_reports"]); invalidate(); },
+    onError: (e: any) => toast.error(e.message ?? "خطأ"),
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="glass rounded-2xl p-6 max-w-3xl space-y-3">
+        <h3 className="text-lg font-bold">إضافة أدمن فرعي</h3>
+        <form onSubmit={e => {
+          e.preventDefault();
+          if (username.trim().length < 2) return toast.error("اكتب اسم المستخدم");
+          if (pw.length < 4) return toast.error("كلمة المرور قصيرة");
+          if (perms.length === 0) return toast.error("اختر صلاحية واحدة على الأقل");
+          addMut.mutate();
+        }} className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <input value={username} onChange={e => setUsername(e.target.value)} placeholder="اسم المستخدم"
+              className="rounded-lg bg-input border border-border px-3 py-2.5 text-sm" />
+            <input type="text" value={pw} onChange={e => setPw(e.target.value)} placeholder="كلمة المرور"
+              className="rounded-lg bg-input border border-border px-3 py-2.5 text-sm" />
+          </div>
+          <div className="space-y-2">
+            <span className="text-sm font-medium">الصلاحيات:</span>
+            <div className="grid sm:grid-cols-2 gap-2">
+              {ALL_PERMISSIONS.map(p => (
+                <label key={p.key} className="flex items-center gap-2 rounded-lg bg-card/60 border border-border/50 px-3 py-2 text-sm cursor-pointer">
+                  <input type="checkbox" checked={perms.includes(p.key)}
+                    onChange={e => setPerms(e.target.checked ? [...perms, p.key] : perms.filter(x => x !== p.key))} />
+                  {p.label}
+                </label>
+              ))}
+            </div>
+          </div>
+          <button disabled={addMut.isPending} className="btn-primary-grad rounded-lg px-5 py-2.5 text-sm">
+            {addMut.isPending ? "..." : "+ إنشاء أدمن"}
+          </button>
+        </form>
+      </div>
+
+      <div className="glass rounded-2xl p-6 space-y-3">
+        <h3 className="text-lg font-bold">الأدمنز الحاليون</h3>
+        {isLoading ? <p className="text-muted-foreground text-sm">جاري التحميل...</p>
+          : admins.length === 0 ? <p className="text-muted-foreground text-sm">لا يوجد أدمنز فرعيون.</p>
+          : admins.map(a => <SubAdminRow key={a.id} admin={a} adminPassword={password} onChange={invalidate} />)}
+      </div>
+    </div>
+  );
+}
+
+function SubAdminRow({ admin, adminPassword, onChange }: { admin: AdminUser; adminPassword: string; onChange: () => void }) {
+  const [perms, setPerms] = useState<PermissionKey[]>(admin.permissions);
+  const [newPw, setNewPw] = useState("");
+  const upd = useMutation({
+    mutationFn: () => adminUpdateAdmin(adminPassword, admin.id, newPw || null, perms),
+    onSuccess: () => { toast.success("تم التحديث"); setNewPw(""); onChange(); },
+    onError: (e: any) => toast.error(e.message ?? "خطأ"),
+  });
+  const del = useMutation({
+    mutationFn: () => adminDeleteAdmin(adminPassword, admin.id),
+    onSuccess: () => { toast.success("تم الحذف"); onChange(); },
     onError: (e: any) => toast.error(e.message ?? "خطأ"),
   });
   return (
-    <div className="glass rounded-2xl p-6 max-w-lg space-y-4">
-      <h3 className="text-lg font-bold">تغيير كلمة مرور الأدمن</h3>
-      <Field label="كلمة المرور الحالية">
-        <input type="password" value={oldP} onChange={e => setOldP(e.target.value)}
-          className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
-      </Field>
-      <Field label="كلمة المرور الجديدة">
-        <input type="password" value={newP} onChange={e => setNewP(e.target.value)}
-          className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
-      </Field>
-      <button onClick={() => { if (newP.length < 4) return toast.error("4 أحرف على الأقل"); mut.mutate(); }}
-        disabled={mut.isPending} className="btn-primary-grad rounded-lg px-5 py-2.5 text-sm">
-        {mut.isPending ? "..." : "تحديث كلمة المرور"}
-      </button>
+    <div className="rounded-lg bg-card/60 border border-border/50 p-4 space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="font-bold flex-1 min-w-[8rem]">{admin.username}</span>
+        <input type="text" value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="كلمة مرور جديدة (اختياري)"
+          className="rounded bg-input border border-border px-3 py-2 text-sm" />
+        <button onClick={() => upd.mutate()} disabled={upd.isPending}
+          className="btn-primary-grad rounded px-4 py-2 text-xs">{upd.isPending ? "..." : "حفظ"}</button>
+        <button onClick={() => { if (confirm(`حذف الأدمن ${admin.username}؟`)) del.mutate(); }}
+          className="rounded border border-destructive/50 text-destructive px-3 py-2 text-xs hover:bg-destructive/10">حذف</button>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-2">
+        {ALL_PERMISSIONS.map(p => (
+          <label key={p.key} className="flex items-center gap-2 text-xs cursor-pointer">
+            <input type="checkbox" checked={perms.includes(p.key)}
+              onChange={e => setPerms(e.target.checked ? [...perms, p.key] : perms.filter(x => x !== p.key))} />
+            {p.label}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ============ SETTINGS TAB ============
+function AdminSettingsTab({ session }: { session: AdminSession }) {
+  const qc = useQueryClient();
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettings });
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [email, setEmail] = useState("");
+  useEffect(() => {
+    if (settings) { setTheme(settings.theme); setEmail(settings.notification_email ?? ""); }
+  }, [settings]);
+
+  const saveMut = useMutation({
+    mutationFn: () => adminUpdateSettings(session.password, theme, email),
+    onSuccess: () => {
+      toast.success("تم حفظ الإعدادات");
+      applyTheme(theme);
+      qc.invalidateQueries({ queryKey: ["settings"] });
+    },
+    onError: (e: any) => toast.error(e.message ?? "خطأ"),
+  });
+
+  const [oldP, setOldP] = useState(session.password);
+  const [newP, setNewP] = useState("");
+  const pwMut = useMutation({
+    mutationFn: () => adminUpdateMasterPassword(oldP, newP),
+    onSuccess: () => { toast.success("تم تغيير كلمة المرور — سجّل دخول مجدداً"); setNewP(""); },
+    onError: (e: any) => toast.error(e.message ?? "خطأ"),
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="glass rounded-2xl p-6 max-w-2xl space-y-4">
+        <h3 className="text-lg font-bold">الإعدادات العامة</h3>
+
+        <div className="space-y-2">
+          <span className="text-sm font-medium">السمة (Theme)</span>
+          <div className="grid grid-cols-2 gap-3">
+            <button type="button" onClick={() => { setTheme("dark"); applyTheme("dark"); }}
+              className={`rounded-xl border-2 p-4 text-right transition ${theme === "dark" ? "border-primary bg-primary/10" : "border-border bg-card/60"}`}>
+              <div className="text-sm font-bold mb-1">🌙 داكن (الحالي)</div>
+              <div className="text-xs text-muted-foreground">خلفية داكنة بألوان نيون</div>
+            </button>
+            <button type="button" onClick={() => { setTheme("light"); applyTheme("light"); }}
+              className={`rounded-xl border-2 p-4 text-right transition ${theme === "light" ? "border-primary bg-primary/10" : "border-border bg-card/60"}`}>
+              <div className="text-sm font-bold mb-1">☀️ مودرن فاتح</div>
+              <div className="text-xs text-muted-foreground">خلفية بيضاء عصرية</div>
+            </button>
+          </div>
+        </div>
+
+        <Field label="البريد الإلكتروني لاستقبال التقارير اليومية">
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+            placeholder="name@example.com"
+            className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
+        </Field>
+        <p className="text-xs text-muted-foreground">
+          عند تصدير التقرير اليومي، يظهر زر «إرسال للبريد» يفتح برنامج البريد لإرسال PDF لهذا الإيميل.
+        </p>
+
+        <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending}
+          className="btn-primary-grad rounded-lg px-5 py-2.5 text-sm">
+          {saveMut.isPending ? "..." : "حفظ الإعدادات"}
+        </button>
+      </div>
+
+      {session.isMaster && (
+        <div className="glass rounded-2xl p-6 max-w-lg space-y-4">
+          <h3 className="text-lg font-bold">تغيير كلمة مرور الأدمن الرئيسي</h3>
+          <Field label="كلمة المرور الحالية">
+            <input type="password" value={oldP} onChange={e => setOldP(e.target.value)}
+              className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
+          </Field>
+          <Field label="كلمة المرور الجديدة">
+            <input type="password" value={newP} onChange={e => setNewP(e.target.value)}
+              className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
+          </Field>
+          <button onClick={() => { if (newP.length < 4) return toast.error("4 أحرف على الأقل"); pwMut.mutate(); }}
+            disabled={pwMut.isPending} className="btn-primary-grad rounded-lg px-5 py-2.5 text-sm">
+            {pwMut.isPending ? "..." : "تحديث"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
