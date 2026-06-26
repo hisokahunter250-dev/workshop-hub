@@ -11,12 +11,13 @@ import {
   adminAddWorkshop, adminDeleteWorkshop,
   adminListAdmins, adminAddAdmin, adminUpdateAdmin, adminDeleteAdmin,
   getSettings, adminUpdateSettings,
+  workshopChangePassword,
   ALL_PERMISSIONS,
   BUILTIN_KEYS,
   type Workshop, type Report, type AdminSummary, type FieldConfig,
   type PermissionKey, type AdminUser,
 } from "@/lib/api";
-import { exportAdminExcel, exportAdminPDF, exportDailyPDF } from "@/lib/export";
+import { exportAdminExcel, exportAdminPDF, exportDailyPDF, importAdminExcel } from "@/lib/export";
 
 export const Route = createFileRoute("/")({
   head: () => ({
