@@ -1017,3 +1017,79 @@ function AdminSettingsTab({ session }: { session: AdminSession }) {
     </div>
   );
 }
+
+// ============ CHANGE WORKSHOP PASSWORD ============
+function ChangeWorkshopPassword({ session, onSessionUpdate }: {
+  session: Extract<Session, { kind: "workshop" }>; onSessionUpdate: (s: Session) => void;
+}) {
+  const [oldP, setOldP] = useState("");
+  const [newP, setNewP] = useState("");
+  const [newP2, setNewP2] = useState("");
+  const mut = useMutation({
+    mutationFn: () => workshopChangePassword(session.id, oldP, newP),
+    onSuccess: () => {
+      toast.success("تم تغيير كلمة المرور");
+      onSessionUpdate({ ...session, password: newP });
+      setOldP(""); setNewP(""); setNewP2("");
+    },
+    onError: (e: any) => toast.error(e.message ?? "خطأ"),
+  });
+  return (
+    <section className="glass rounded-2xl p-6 max-w-2xl">
+      <h3 className="text-xl font-bold mb-4">🔑 تغيير كلمة المرور</h3>
+      <form onSubmit={e => {
+        e.preventDefault();
+        if (newP.length < 3) return toast.error("كلمة المرور قصيرة (3 أحرف على الأقل)");
+        if (newP !== newP2) return toast.error("كلمة المرور وتأكيدها غير متطابقين");
+        mut.mutate();
+      }} className="grid gap-3 sm:grid-cols-3">
+        <Field label="كلمة المرور الحالية">
+          <input type="password" value={oldP} onChange={e => setOldP(e.target.value)}
+            className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
+        </Field>
+        <Field label="كلمة المرور الجديدة">
+          <input type="password" value={newP} onChange={e => setNewP(e.target.value)}
+            className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
+        </Field>
+        <Field label="تأكيد الجديدة">
+          <input type="password" value={newP2} onChange={e => setNewP2(e.target.value)}
+            className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
+        </Field>
+        <button disabled={mut.isPending || !oldP || !newP} className="btn-primary-grad rounded-lg px-4 py-2.5 text-sm sm:col-start-3">
+          {mut.isPending ? "..." : "تحديث كلمة المرور"}
+        </button>
+      </form>
+    </section>
+  );
+}
+
+// ============ ADMIN IMPORT ============
+function AdminImportSection({ password }: { password: string }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!confirm(`استيراد التقارير من ${file.name}؟ سيتم إضافة الصفوف كتقارير جديدة.`)) return;
+    setBusy(true);
+    try {
+      const res = await importAdminExcel(password, file);
+      toast.success(`تم الاستيراد: ${res.imported} صف${res.skipped ? ` — تخطى ${res.skipped}` : ""}`);
+      if (res.errors.length) {
+        console.warn("Import errors:", res.errors);
+        toast.message(`تنبيهات (${res.errors.length})`, { description: res.errors.slice(0, 3).join(" • ") });
+      }
+      qc.invalidateQueries({ queryKey: ["adminAll"] });
+      qc.invalidateQueries({ queryKey: ["adminReports"] });
+    } catch (err: any) {
+      toast.error(err.message ?? "فشل الاستيراد");
+    } finally { setBusy(false); }
+  }
+  return (
+    <label className={`rounded-lg border border-border bg-secondary/60 hover:bg-secondary px-5 py-2.5 text-sm cursor-pointer ${busy ? "opacity-60 pointer-events-none" : ""}`}>
+      {busy ? "جاري الاستيراد..." : "📥 استيراد من Excel"}
+      <input type="file" accept=".xlsx,.xls" onChange={onFile} className="hidden" />
+    </label>
+  );
+}
