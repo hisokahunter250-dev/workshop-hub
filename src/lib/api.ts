@@ -20,6 +20,7 @@ export type AdminSummary = {
   total_repaired: number;
   total_delivered: number;
   reports_count: number;
+  last_report_at?: string | null;
 };
 export type FieldConfig = {
   id: string;
