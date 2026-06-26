@@ -543,6 +543,9 @@ function AdminSummaryTab({ session }: { session: AdminSession }) {
 
 function RowWithDetails({ row, session, fields, open, onToggle }:
   { row: AdminSummary; session: AdminSession; fields: FieldConfig[]; open: boolean; onToggle: () => void }) {
+  const last = row.last_report_at
+    ? new Date(row.last_report_at).toLocaleString("ar-EG", { dateStyle: "short", timeStyle: "short" })
+    : "—";
   return (
     <>
       <tr className="border-b border-border/50 hover:bg-secondary/30">
@@ -551,6 +554,7 @@ function RowWithDetails({ row, session, fields, open, onToggle }:
         <td className="py-3 px-3 text-success font-bold">{Number(row.total_repaired).toLocaleString("ar-EG")}</td>
         <td className="py-3 px-3 text-warning font-bold">{Number(row.total_delivered).toLocaleString("ar-EG")}</td>
         <td className="py-3 px-3">{Number(row.reports_count)}</td>
+        <td className="py-3 px-3 text-xs text-muted-foreground whitespace-nowrap">{last}</td>
         <td className="py-3 px-3">
           <button onClick={onToggle} className="rounded-lg border border-border bg-secondary/60 px-3 py-1.5 text-xs hover:bg-secondary">
             {open ? "إخفاء" : "عرض التقارير"}
@@ -558,7 +562,7 @@ function RowWithDetails({ row, session, fields, open, onToggle }:
         </td>
       </tr>
       {open && (
-        <tr><td colSpan={6} className="bg-background/40 p-4">
+        <tr><td colSpan={7} className="bg-background/40 p-4">
           <WorkshopReportsAdmin session={session} workshopId={row.workshop_id} fields={fields} />
         </td></tr>
       )}
