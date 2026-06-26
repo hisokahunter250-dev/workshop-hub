@@ -352,6 +352,8 @@ function WorkshopView({ session, onLogout, onSessionUpdate }: {
           : <ReportsTable reports={reports} fields={fields} />}
       </section>
 
+      <ChangeWorkshopPassword session={session} onSessionUpdate={onSessionUpdate} />
+
       <button onClick={onLogout} className="text-sm text-muted-foreground hover:text-foreground">خروج →</button>
     </div>
   );
