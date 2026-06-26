@@ -230,3 +230,99 @@ export async function exportDailyPDF(adminPassword: string, dateISO: string, all
     fields, rows: aggregated, details, autoPrint: true, email: email ?? null,
   }));
 }
+
+// ---------- Import previously exported Excel ----------
+function normalize(s: string) {
+  return String(s ?? "").replace(/\s+/g, " ").trim();
+}
+function parseDate(v: any): string | null {
+  if (v == null || v === "") return null;
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (typeof v === "number") {
+    const d = XLSX.SSF.parse_date_code(v);
+    if (d) return `${d.y}-${String(d.m).padStart(2,"0")}-${String(d.d).padStart(2,"0")}`;
+  }
+  const s = String(v).trim();
+  const m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (m) return `${m[1]}-${m[2].padStart(2,"0")}-${m[3].padStart(2,"0")}`;
+  const d = new Date(s);
+  return isNaN(+d) ? null : d.toISOString().slice(0, 10);
+}
+
+export type ImportResult = { imported: number; skipped: number; sheets: number; errors: string[] };
+
+export async function importAdminExcel(adminPassword: string, file: File): Promise<ImportResult> {
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array" });
+  const [workshops, fields] = await Promise.all([listWorkshops(), listFields().catch(() => [] as FieldConfig[])]);
+  const wsByName = new Map(workshops.map(w => [normalize(w.name), w]));
+  const extras = fields.filter(f => !f.is_builtin);
+  const labelToKey = new Map<string, string>();
+  for (const f of fields) labelToKey.set(normalize(f.label), f.key);
+  // builtin label fallbacks
+  const builtinLabel = (k: string, fb: string) => normalize(fields.find(f => f.key === k)?.label ?? fb);
+  const recL = builtinLabel("received","الوارد للصيانة");
+  const repL = builtinLabel("repaired","تم تصليحه");
+  const delL = builtinLabel("delivered","تم تسليمه للمركز");
+
+  const res: ImportResult = { imported: 0, skipped: 0, sheets: 0, errors: [] };
+
+  for (const sheetName of wb.SheetNames) {
+    if (sheetName === "الملخص") continue;
+    const sheet = wb.Sheets[sheetName];
+    const aoa = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, raw: true, defval: "" });
+    if (!aoa.length) continue;
+    res.sheets++;
+
+    // find workshop by sheet name or first cell
+    const cand = normalize(sheetName);
+    const cand2 = normalize(aoa[0]?.[0] ?? "");
+    const ws = wsByName.get(cand) ?? wsByName.get(cand2);
+    if (!ws) { res.errors.push(`الورشة غير موجودة: ${sheetName}`); continue; }
+
+    // find header row
+    let headerIdx = -1;
+    for (let i = 0; i < Math.min(aoa.length, 6); i++) {
+      const row = aoa[i].map(c => normalize(c));
+      if (row.includes("التاريخ") || row.includes(recL)) { headerIdx = i; break; }
+    }
+    if (headerIdx === -1) { res.errors.push(`لم يتم العثور على رؤوس الأعمدة في ${sheetName}`); continue; }
+    const header = aoa[headerIdx].map(c => normalize(c));
+    const col = (label: string) => header.findIndex(h => h === label);
+    const cDate = col("التاريخ");
+    const cRec = col(recL) >= 0 ? col(recL) : col("الوارد");
+    const cRep = col(repL) >= 0 ? col(repL) : col("تم تصليحه");
+    const cDel = col(delL) >= 0 ? col(delL) : col("تم تسليمه");
+    const cNotes = col("ملاحظات");
+    const extraCols: Array<{ key: string; idx: number }> = [];
+    header.forEach((h, idx) => {
+      const k = labelToKey.get(h);
+      if (k && !["received","repaired","delivered"].includes(k)) extraCols.push({ key: k, idx });
+    });
+
+    for (let i = headerIdx + 1; i < aoa.length; i++) {
+      const row = aoa[i];
+      if (!row || row.every(c => c === "" || c == null)) continue;
+      const date = parseDate(row[cDate]);
+      if (!date) { res.skipped++; continue; }
+      const extra: Record<string, number> = {};
+      for (const e of extraCols) extra[e.key] = Number(row[e.idx]) || 0;
+      try {
+        await adminImportReport({
+          adminPassword, workshopId: ws.id, date,
+          received: Number(row[cRec]) || 0,
+          repaired: Number(row[cRep]) || 0,
+          delivered: Number(row[cDel]) || 0,
+          notes: cNotes >= 0 ? String(row[cNotes] ?? "") : "",
+          extra,
+        });
+        res.imported++;
+      } catch (e: any) {
+        res.errors.push(`${sheetName} صف ${i+1}: ${e.message ?? e}`);
+        res.skipped++;
+      }
+    }
+  }
+  void extras;
+  return res;
+}
