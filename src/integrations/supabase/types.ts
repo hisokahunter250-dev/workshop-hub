@@ -236,6 +236,7 @@ export type Database = {
       admin_get_all: {
         Args: { p_admin_password: string }
         Returns: {
+          last_report_at: string
           reports_count: number
           sort_order: number
           total_delivered: number
@@ -264,6 +265,19 @@ export type Database = {
           isOneToOne: false
           isSetofReturn: true
         }
+      }
+      admin_import_report: {
+        Args: {
+          p_admin_password: string
+          p_date: string
+          p_delivered: number
+          p_extra?: Json
+          p_notes: string
+          p_received: number
+          p_repaired: number
+          p_workshop_id: string
+        }
+        Returns: string
       }
       admin_list_admins: {
         Args: { p_admin_password: string }
@@ -396,6 +410,14 @@ export type Database = {
           id: string
           name: string
         }[]
+      }
+      workshop_change_password: {
+        Args: {
+          p_new_password: string
+          p_old_password: string
+          p_workshop_id: string
+        }
+        Returns: boolean
       }
     }
     Enums: {
