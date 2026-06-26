@@ -80,7 +80,7 @@ function HomePage() {
       <Header session={session} onLogout={() => setAndSave({ kind: "none" })} />
       <main className="mx-auto max-w-7xl px-4 py-8 sm:py-12">
         {session.kind === "none" && <LoginScreen onLogin={setAndSave} />}
-        {session.kind === "workshop" && <WorkshopView session={session} onLogout={() => setAndSave({ kind: "none" })} />}
+        {session.kind === "workshop" && <WorkshopView session={session} onLogout={() => setAndSave({ kind: "none" })} onSessionUpdate={setAndSave} />}
         {session.kind === "admin" && <AdminView session={session} />}
       </main>
       <footer className="border-t border-border/50 py-6 text-center text-xs text-muted-foreground">
