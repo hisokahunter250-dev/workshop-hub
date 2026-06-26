@@ -499,6 +499,7 @@ function AdminSummaryTab({ session }: { session: AdminSession }) {
         <div className="flex flex-wrap gap-3 items-end">
           <button onClick={handleExcel} className="btn-primary-grad rounded-lg px-5 py-2.5 text-sm">📊 تصدير Excel</button>
           <button onClick={handlePDF} className="rounded-lg border border-border bg-secondary/60 hover:bg-secondary px-5 py-2.5 text-sm">📄 تصدير PDF شامل</button>
+          {hasPerm(session, "edit_reports") && <AdminImportSection password={password} />}
           <div className="h-8 w-px bg-border mx-1" />
           <Field label="تقرير يومي بتاريخ">
             <input type="date" value={dailyDate} onChange={e => setDailyDate(e.target.value)}
