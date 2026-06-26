@@ -11,12 +11,13 @@ import {
   adminAddWorkshop, adminDeleteWorkshop,
   adminListAdmins, adminAddAdmin, adminUpdateAdmin, adminDeleteAdmin,
   getSettings, adminUpdateSettings,
+  workshopChangePassword,
   ALL_PERMISSIONS,
   BUILTIN_KEYS,
   type Workshop, type Report, type AdminSummary, type FieldConfig,
   type PermissionKey, type AdminUser,
 } from "@/lib/api";
-import { exportAdminExcel, exportAdminPDF, exportDailyPDF } from "@/lib/export";
+import { exportAdminExcel, exportAdminPDF, exportDailyPDF, importAdminExcel } from "@/lib/export";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -79,7 +80,7 @@ function HomePage() {
       <Header session={session} onLogout={() => setAndSave({ kind: "none" })} />
       <main className="mx-auto max-w-7xl px-4 py-8 sm:py-12">
         {session.kind === "none" && <LoginScreen onLogin={setAndSave} />}
-        {session.kind === "workshop" && <WorkshopView session={session} onLogout={() => setAndSave({ kind: "none" })} />}
+        {session.kind === "workshop" && <WorkshopView session={session} onLogout={() => setAndSave({ kind: "none" })} onSessionUpdate={setAndSave} />}
         {session.kind === "admin" && <AdminView session={session} />}
       </main>
       <footer className="border-t border-border/50 py-6 text-center text-xs text-muted-foreground">
@@ -236,8 +237,9 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 // ============ WORKSHOP VIEW ============
-function WorkshopView({ session, onLogout }: {
+function WorkshopView({ session, onLogout, onSessionUpdate }: {
   session: Extract<Session, { kind: "workshop" }>; onLogout: () => void;
+  onSessionUpdate: (s: Session) => void;
 }) {
   const qc = useQueryClient();
   const { data: fields = [] } = useFields();
@@ -349,6 +351,8 @@ function WorkshopView({ session, onLogout }: {
           : reports.length === 0 ? <p className="text-muted-foreground text-sm">لا توجد تقارير بعد.</p>
           : <ReportsTable reports={reports} fields={fields} />}
       </section>
+
+      <ChangeWorkshopPassword session={session} onSessionUpdate={onSessionUpdate} />
 
       <button onClick={onLogout} className="text-sm text-muted-foreground hover:text-foreground">خروج →</button>
     </div>
@@ -495,6 +499,7 @@ function AdminSummaryTab({ session }: { session: AdminSession }) {
         <div className="flex flex-wrap gap-3 items-end">
           <button onClick={handleExcel} className="btn-primary-grad rounded-lg px-5 py-2.5 text-sm">📊 تصدير Excel</button>
           <button onClick={handlePDF} className="rounded-lg border border-border bg-secondary/60 hover:bg-secondary px-5 py-2.5 text-sm">📄 تصدير PDF شامل</button>
+          {hasPerm(session, "edit_reports") && <AdminImportSection password={password} />}
           <div className="h-8 w-px bg-border mx-1" />
           <Field label="تقرير يومي بتاريخ">
             <input type="date" value={dailyDate} onChange={e => setDailyDate(e.target.value)}
@@ -519,6 +524,7 @@ function AdminSummaryTab({ session }: { session: AdminSession }) {
                 <th className="py-3 px-3">{labelFor(fields, "repaired", "تم تصليحه")}</th>
                 <th className="py-3 px-3">{labelFor(fields, "delivered", "تم تسليمه")}</th>
                 <th className="py-3 px-3">عدد التقارير</th>
+                <th className="py-3 px-3">آخر تحديث</th>
                 <th className="py-3 px-3"></th>
               </tr>
             </thead>
@@ -537,6 +543,9 @@ function AdminSummaryTab({ session }: { session: AdminSession }) {
 
 function RowWithDetails({ row, session, fields, open, onToggle }:
   { row: AdminSummary; session: AdminSession; fields: FieldConfig[]; open: boolean; onToggle: () => void }) {
+  const last = row.last_report_at
+    ? new Date(row.last_report_at).toLocaleString("ar-EG", { dateStyle: "short", timeStyle: "short" })
+    : "—";
   return (
     <>
       <tr className="border-b border-border/50 hover:bg-secondary/30">
@@ -545,6 +554,7 @@ function RowWithDetails({ row, session, fields, open, onToggle }:
         <td className="py-3 px-3 text-success font-bold">{Number(row.total_repaired).toLocaleString("ar-EG")}</td>
         <td className="py-3 px-3 text-warning font-bold">{Number(row.total_delivered).toLocaleString("ar-EG")}</td>
         <td className="py-3 px-3">{Number(row.reports_count)}</td>
+        <td className="py-3 px-3 text-xs text-muted-foreground whitespace-nowrap">{last}</td>
         <td className="py-3 px-3">
           <button onClick={onToggle} className="rounded-lg border border-border bg-secondary/60 px-3 py-1.5 text-xs hover:bg-secondary">
             {open ? "إخفاء" : "عرض التقارير"}
@@ -552,7 +562,7 @@ function RowWithDetails({ row, session, fields, open, onToggle }:
         </td>
       </tr>
       {open && (
-        <tr><td colSpan={6} className="bg-background/40 p-4">
+        <tr><td colSpan={7} className="bg-background/40 p-4">
           <WorkshopReportsAdmin session={session} workshopId={row.workshop_id} fields={fields} />
         </td></tr>
       )}
@@ -1011,5 +1021,81 @@ function AdminSettingsTab({ session }: { session: AdminSession }) {
         </div>
       )}
     </div>
+  );
+}
+
+// ============ CHANGE WORKSHOP PASSWORD ============
+function ChangeWorkshopPassword({ session, onSessionUpdate }: {
+  session: Extract<Session, { kind: "workshop" }>; onSessionUpdate: (s: Session) => void;
+}) {
+  const [oldP, setOldP] = useState("");
+  const [newP, setNewP] = useState("");
+  const [newP2, setNewP2] = useState("");
+  const mut = useMutation({
+    mutationFn: () => workshopChangePassword(session.id, oldP, newP),
+    onSuccess: () => {
+      toast.success("تم تغيير كلمة المرور");
+      onSessionUpdate({ ...session, password: newP });
+      setOldP(""); setNewP(""); setNewP2("");
+    },
+    onError: (e: any) => toast.error(e.message ?? "خطأ"),
+  });
+  return (
+    <section className="glass rounded-2xl p-6 max-w-2xl">
+      <h3 className="text-xl font-bold mb-4">🔑 تغيير كلمة المرور</h3>
+      <form onSubmit={e => {
+        e.preventDefault();
+        if (newP.length < 3) return toast.error("كلمة المرور قصيرة (3 أحرف على الأقل)");
+        if (newP !== newP2) return toast.error("كلمة المرور وتأكيدها غير متطابقين");
+        mut.mutate();
+      }} className="grid gap-3 sm:grid-cols-3">
+        <Field label="كلمة المرور الحالية">
+          <input type="password" value={oldP} onChange={e => setOldP(e.target.value)}
+            className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
+        </Field>
+        <Field label="كلمة المرور الجديدة">
+          <input type="password" value={newP} onChange={e => setNewP(e.target.value)}
+            className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
+        </Field>
+        <Field label="تأكيد الجديدة">
+          <input type="password" value={newP2} onChange={e => setNewP2(e.target.value)}
+            className="w-full rounded-lg bg-input border border-border px-3 py-2.5" />
+        </Field>
+        <button disabled={mut.isPending || !oldP || !newP} className="btn-primary-grad rounded-lg px-4 py-2.5 text-sm sm:col-start-3">
+          {mut.isPending ? "..." : "تحديث كلمة المرور"}
+        </button>
+      </form>
+    </section>
+  );
+}
+
+// ============ ADMIN IMPORT ============
+function AdminImportSection({ password }: { password: string }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!confirm(`استيراد التقارير من ${file.name}؟ سيتم إضافة الصفوف كتقارير جديدة.`)) return;
+    setBusy(true);
+    try {
+      const res = await importAdminExcel(password, file);
+      toast.success(`تم الاستيراد: ${res.imported} صف${res.skipped ? ` — تخطى ${res.skipped}` : ""}`);
+      if (res.errors.length) {
+        console.warn("Import errors:", res.errors);
+        toast.message(`تنبيهات (${res.errors.length})`, { description: res.errors.slice(0, 3).join(" • ") });
+      }
+      qc.invalidateQueries({ queryKey: ["adminAll"] });
+      qc.invalidateQueries({ queryKey: ["adminReports"] });
+    } catch (err: any) {
+      toast.error(err.message ?? "فشل الاستيراد");
+    } finally { setBusy(false); }
+  }
+  return (
+    <label className={`rounded-lg border border-border bg-secondary/60 hover:bg-secondary px-5 py-2.5 text-sm cursor-pointer ${busy ? "opacity-60 pointer-events-none" : ""}`}>
+      {busy ? "جاري الاستيراد..." : "📥 استيراد من Excel"}
+      <input type="file" accept=".xlsx,.xls" onChange={onFile} className="hidden" />
+    </label>
   );
 }

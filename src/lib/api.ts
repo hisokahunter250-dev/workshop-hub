@@ -20,6 +20,7 @@ export type AdminSummary = {
   total_repaired: number;
   total_delivered: number;
   reports_count: number;
+  last_report_at?: string | null;
 };
 export type FieldConfig = {
   id: string;
@@ -109,6 +110,31 @@ export async function loginWorkshop(workshopId: string, password: string) {
   });
   if (error) throw error;
   return (data && data.length > 0) ? data[0] as { id: string; name: string } : null;
+}
+
+export async function workshopChangePassword(workshopId: string, oldPassword: string, newPassword: string) {
+  const { error } = await supabase.rpc("workshop_change_password", {
+    p_workshop_id: workshopId, p_old_password: oldPassword, p_new_password: newPassword,
+  });
+  if (error) throw error;
+}
+
+export async function adminImportReport(args: {
+  adminPassword: string; workshopId: string; date: string;
+  received: number; repaired: number; delivered: number; notes?: string;
+  extra?: Record<string, number>;
+}) {
+  const { error } = await supabase.rpc("admin_import_report", {
+    p_admin_password: args.adminPassword,
+    p_workshop_id: args.workshopId,
+    p_date: args.date,
+    p_received: args.received,
+    p_repaired: args.repaired,
+    p_delivered: args.delivered,
+    p_notes: (args.notes ?? "") as string,
+    p_extra: (args.extra ?? {}) as never,
+  });
+  if (error) throw error;
 }
 
 export async function adminAddWorkshop(adminPassword: string, name: string, password: string) {
