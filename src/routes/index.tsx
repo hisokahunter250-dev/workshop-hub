@@ -237,8 +237,9 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 // ============ WORKSHOP VIEW ============
-function WorkshopView({ session, onLogout }: {
+function WorkshopView({ session, onLogout, onSessionUpdate }: {
   session: Extract<Session, { kind: "workshop" }>; onLogout: () => void;
+  onSessionUpdate: (s: Session) => void;
 }) {
   const qc = useQueryClient();
   const { data: fields = [] } = useFields();
