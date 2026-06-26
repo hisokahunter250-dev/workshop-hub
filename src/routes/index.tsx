@@ -524,6 +524,7 @@ function AdminSummaryTab({ session }: { session: AdminSession }) {
                 <th className="py-3 px-3">{labelFor(fields, "repaired", "تم تصليحه")}</th>
                 <th className="py-3 px-3">{labelFor(fields, "delivered", "تم تسليمه")}</th>
                 <th className="py-3 px-3">عدد التقارير</th>
+                <th className="py-3 px-3">آخر تحديث</th>
                 <th className="py-3 px-3"></th>
               </tr>
             </thead>
